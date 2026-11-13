@@ -1,0 +1,27 @@
+S40 Homebrew
+
+The project's original resolver, device profiles, bootstrap, Java launcher,
+native runtime, compatibility headers, tools and documentation are
+licensed under MIT. Copyright (c) 2026 S40 Homebrew contributors.
+See COPYING at the project root, packaged as licenses/COPYING.MIT in each JAR.
+Application-specific notices are packaged separately when applicable.
+
+This build links newlib/libm and libgcc from Arm GNU Toolchain 15.3.rel2,
+arm-none-eabi, using its generic soft-float libraries. Newlib copyright and
+permission notices are reproduced in COPYING.NEWLIB. GCC's runtime exception
+and GPLv3 text are reproduced in COPYING.RUNTIME and COPYING.GCC3.
+
+Runtime/source locations:
+https://developer.arm.com/Tools%20and%20Software/GNU%20Toolchain
+https://sourceware.org/newlib/
+https://gcc.gnu.org/
+
+Notice texts retrieved from the source mirrors:
+https://github.com/mirror/newlib-cygwin/blob/master/COPYING.NEWLIB
+https://github.com/gcc-mirror/gcc/blob/releases/gcc-15/COPYING.RUNTIME
+https://github.com/gcc-mirror/gcc/blob/releases/gcc-15/COPYING3
+
+The MIT license does not replace the licenses of third-party code or tools.
+Newlib/GCC license texts cover the bundled library components, not a blanket
+license for the S40 Homebrew source. Build-only tools retain their own licenses
+and are not bundled in the application JAR.

@@ -1,0 +1,8 @@
+Manifest-Version: 1.0
+MIDlet-Name: Native Time
+MIDlet-Version: 1.1.1
+MIDlet-Vendor: S40 Homebrew
+MIDlet-1: Native Time,,NativeTime
+MicroEdition-Configuration: CLDC-1.1
+MicroEdition-Profile: MIDP-2.1
+

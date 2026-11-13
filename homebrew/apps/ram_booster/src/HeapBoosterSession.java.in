@@ -1,0 +1,431 @@
+/* SPDX-License-Identifier: MIT */
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import javax.microedition.lcdui.Image;
+
+/**
+ * Reversible getRGB memory view and synchronized, zero-argument maintenance
+ * call. This concrete class owns its native method and carrier metadata.
+ * All diagnostics and UI work happen after restoring the forged array.
+ * Port together with the VM layout and carrier, not just the CPU payload:
+ * 32-bit little-endian references, int[] data at object+12, class method table
+ * at +36, 32-byte method records. Full contract: apps/ram_booster/docs/porting.md.
+ */
+final class HeapBoosterSession implements HeapBoosterProtocol {
+    private static final int LENGTH = 0x40000000;
+    final HeapBoosterProfile profile;
+    final HeapPatchResolver resolver;
+    final int[] result = new int[RESULT_WORDS];
+    static final int PREPARE = 0, MEMORY_VIEW = 1, DISCOVERY = 2, METHOD_LOOKUP = 3, INSTALL = 4,
+                     NATIVE_CALL = 5, CLEANUP = 6;
+    int error, stage;
+    boolean needsRestart, nativeCalled;
+    Throwable failure;
+    private byte[] binary;
+    private int bindingOffset;
+    private int[] codeBackup, canary, target, destination;
+    private Object[] box;
+    private int base, method, carrier, payloadCode;
+    private boolean forged, methodChanged, literalsChanged, canaryChanged, payloadChanged;
+    private boolean codeSpaceLoaded;
+    private int saved0, saved1, saved2, saved3;
+    private static native void nativeQuery();
+
+    HeapBoosterSession(HeapBoosterProfile p) {
+        profile = p;
+        resolver = new HeapPatchResolver(p);
+    }
+    void execute(int operation, int mib) {
+        executeTo(operation, mib, NATIVE_CALL);
+    }
+    /** Diagnostic stop points always use Check; none requests a quota write. */
+    void probe(int lastStage) {
+        executeTo(OP_CHECK, 0, lastStage);
+    }
+    private void executeTo(int operation, int mib, int lastStage) {
+        // A failed rollback/VM repair is a real runtime failure, not a device
+        // gate. Preserve its evidence; retrying would discard the saved state.
+        if (needsRestart)
+            return;
+        stage = PREPARE;
+        nativeCalled = false;
+        error = 0;
+        failure = null;
+        resolver.reset();
+        for (int i = 0; i < result.length; i++)
+            result[i] = 0;
+        result[W_OPERATION] = operation;
+        result[W_MIB] = mib;
+        try {
+            error = chain(operation, mib, lastStage);
+        } catch (Throwable t) {
+            failure = t;
+            error = 90;
+        } finally {
+            try {
+                restore();
+            } catch (Throwable t) {
+                if (failure == null)
+                    failure = t;
+                error = 91;
+            }
+            if (error == 91)
+                stage = CLEANUP;
+            needsRestart = error == 91 || error == 208;
+        }
+    }
+    /** Shared by every device. Only the profile and native mapping backend vary. */
+    private int chain(int operation, int mib, int lastStage) throws IOException {
+        if (lastStage < MEMORY_VIEW || lastStage > NATIVE_CALL
+                || operation < OP_CHECK || operation > OP_RESTORE
+                || (operation == OP_APPLY && !HeapPatchResolver.choice(mib)))
+            return 1;
+        int status = prepare();
+        if (status != 0)
+            return status;
+        stage = MEMORY_VIEW;
+        status = openMemoryView();
+        if (status != 0 || lastStage == MEMORY_VIEW)
+            return status;
+        stage = DISCOVERY;
+        status = discoverPolicy(operation, mib);
+        if (status != 0 || lastStage == DISCOVERY)
+            return status;
+        stage = METHOD_LOOKUP;
+        status = findMethods(target[6]);
+        if (status != 0 || lastStage == METHOD_LOOKUP)
+            return status;
+        stage = INSTALL;
+        status = bindNative(target[8] + 12);
+        if (status != 0 || lastStage == INSTALL)
+            return status;
+        stage = NATIVE_CALL;
+        nativeCalled = true;
+        nativeQuery();
+        return result[W_MAGIC] == MAGIC ? result[W_STATUS] : 18;
+    }
+    private int prepare() throws IOException {
+        if (binary == null) {
+            binary = readResource();
+            if (binary.length == 0 || binary.length > 8192 || (binary.length & 3) != 0) {
+                binary = null;
+                return 3;
+            }
+            int matches = 0;
+            for (int i = 0; i < binary.length; i += 4)
+                if (binaryWord(i) == 0xB0057E01) {
+                    bindingOffset = i;
+                    matches++;
+                }
+            if (matches != 1) {
+                binary = null;
+                return 3;
+            }
+        }
+        if (carrierSwitch(0) != 1)
+            return 4;
+        // The VM allocates executable bytecode separately on RAPU, while its
+        // Java object heap is XN. Load this method before forging memory. Never
+        // execute it as Java again: native I-cache lines can outlive restoration
+        // of its bytecode; the carrier syncs every subsequent native invocation.
+        if (!codeSpaceLoaded) {
+            if (payloadSpace(0, 0) != 1)
+                return 4;
+            codeSpaceLoaded = true;
+        }
+        return 0;
+    }
+    private int openMemoryView() {
+        int[] rgb = {LENGTH};
+        Image source = Image.createRGBImage(rgb, 1, 1, true);
+        int[] measured = new int[1];
+        source.getRGB(measured, 0, 1, 0, 0, 1, 1);
+        if (measured[0] != LENGTH)
+            return 5;
+        codeBackup = null;
+        canary = null;
+        box = null;
+        target = null;
+        destination = null;
+        method = carrier = payloadCode = 0;
+        forged = methodChanged = literalsChanged = canaryChanged = payloadChanged = false;
+        System.gc();
+        // After this five-object group, until restore() repairs the array length:
+        // no allocations, UI, logging, resource loading or GC. Order fixes offsets.
+        codeBackup = new int[2048];
+        canary = new int[2];
+        box = new Object[4];
+        target = new int[1];
+        destination = new int[8];
+        canary[0] = 0x13579BDF;
+        canary[1] = 0x2468ACE0;
+        box[0] = codeBackup;
+        box[1] = this;
+        box[2] = target;
+        box[3] = result;
+        source.getRGB(destination, 0x4000000B, 0x40000001, 0x40000000, 0, 0x40000001, 1);
+        if (target.length != LENGTH)
+            return 6;
+        forged = true;
+        if (target[13] != 0x13579BDF || target[14] != 0x2468ACE0)
+            return 7;
+        canaryChanged = true;
+        target[13] = 0x13579BE0;
+        if (canary[0] != 0x13579BE0)
+            return 8;
+        target[13] = 0x13579BDF;
+        canaryChanged = false;
+        int payloadObject = target[5], sessionObject = target[6], targetObject = target[7],
+            resultObject = target[8];
+        if (!alignedRam(payloadObject, 8204) || !alignedRam(sessionObject, 4)
+                || !alignedRam(targetObject, 16) || !alignedRam(resultObject, 268))
+            return 9;
+        base = targetObject + 12;
+        return 0;
+    }
+    private int discoverPolicy(int operation, int mib) {
+        boolean resolved = resolver.resolve(target, base);
+        result[W_SITE] = resolver.site;
+        result[W_VARIANT] = resolver.variant;
+        result[W_POOL_BYTES] = resolver.poolBytes;
+        result[W_CURRENT_MIB] = resolver.currentMiB;
+        if (!resolved)
+            return resolver.error;
+        if (operation == OP_APPLY && (mib * 1048576 > resolver.poolBytes))
+            return 10;
+        // Mapping policy is data passed to the architecture backend. Quota sizes
+        // come from the discovered pool, never a model/firmware size allowlist.
+        result[W_BACKEND] = profile.backend;
+        result[W_ROM_START] = profile.romStart;
+        result[W_ROM_END] = resolver.romEnd;
+        result[W_PHYSICAL_START] = profile.physicalStart;
+        result[W_PHYSICAL_END] = profile.physicalEnd;
+        result[W_ALLOC] = resolver.alloc;
+        result[W_FREE] = resolver.free;
+        result[W_RAM_START] = profile.ramStart;
+        result[W_RAM_END] = resolver.ramEnd;
+        result[W_CACHE_SYNC] = resolver.cacheSync;
+        resolver.makePatch(mib);
+        for (int i = 0; i < 8; i++) {
+            result[W_EXPECTED + i] = 0;
+            result[W_DESIRED + i] = 0;
+        }
+        for (int i = 0; i < PATCH_HALFWORDS; i++) {
+            result[W_EXPECTED + i / 2] |= half(resolver.site + 2 * i) << ((i & 1) * 16);
+            int wanted = operation == OP_RESTORE ? resolver.original[i] : resolver.replacement[i];
+            result[W_DESIRED + i / 2] |= wanted << ((i & 1) * 16);
+        }
+        return 0;
+    }
+    private int bindNative(int output) {
+        int entry = payloadCode + 12;
+        if (!installPayload(output))
+            return 23;
+        // Four carrier literals: payload address, byte length, sync helper,
+        // payload entry. Carrier+13 is Thumb code at +12 with the mode bit set.
+        saved0 = read(carrier + 40);
+        saved1 = read(carrier + 48);
+        saved2 = read(carrier + 56);
+        saved3 = read(carrier + 64);
+        literalsChanged = true;
+        write(carrier + 40, entry);
+        write(carrier + 48, binary.length);
+        write(carrier + 56, resolver.cacheSync);
+        write(carrier + 64, entry);
+        if (read(carrier + 40) != entry || read(carrier + 48) != binary.length
+                || read(carrier + 56) != resolver.cacheSync || read(carrier + 64) != entry)
+            return 16;
+        methodChanged = true;
+        write(method + 4, carrier + 13);
+        if (read(method + 4) != carrier + 13)
+            return 17;
+        return 0;
+    }
+    private int findMethods(int sessionObject) {
+        // This final concrete class owns all three methods. A superclass's table or
+        // different VM record layout cannot be substituted by changing a map.
+        int owner = read(sessionObject);
+        result[W_OWNER] = owner;
+        if (!alignedRam(owner, 40))
+            return 11;
+        int table = read(owner + 36);
+        result[W_METHOD_TABLE] = table;
+        if (!alignedRam(table, 4))
+            return 12;
+        int count = read(table);
+        result[W_METHOD_COUNT] = count;
+        if (count < 1 || count > 512 || !alignedRam(table, 4 + 32 * count))
+            return 12;
+        for (int i = 0; i < count; i++) {
+            int m = table + 4 + 32 * i, flags = read(m + 20), args = read(m + 28) >>> 16;
+            if (read(m + 24) != owner)
+                continue;
+            int code = read(m + 4);
+            if ((flags & 0x108) == 0x108 && args == 0) {
+                result[W_NATIVE_FLAGS] = flags;
+                result[W_NATIVE_CODE] = code;
+            }
+            // Private/static/native are Java access flags. Runtime-specific
+            // upper bits such as C000 are not part of that method identity.
+            if (code == 0 && (flags & 0x050F) == 0x010A && args == 0) {
+                if (method != 0)
+                    return 13;
+                method = m;
+            }
+            // Bytecode has its own allocator on RAPU; it is not necessarily in
+            // the Java object heap. Follow this class's static method record,
+            // check its declared byte length/alignment, then verify the native
+            // instruction words. No scanning of an extra address window.
+            if (code != 0 && args == 1 && (flags & 0x108) == 8 && (read(m + 16) & 65535) == 114) {
+                result[W_CARRIER] = code;
+                result[W_CARRIER_FLAGS] = flags;
+                result[W_CARRIER_BYTES] = read(m + 16) & 65535;
+                if ((code & 3) == 0 && verifyCarrier(code)) {
+                    if (carrier != 0)
+                        return 14;
+                    carrier = code;
+                }
+            }
+            // Return opcodes are quickened in place on first Java execution
+            // (RAPU changes ireturn to D5/D6). Match the invariant iconst bytes
+            // at the tail, not VM-private return encodings. The lookup table
+            // and its size still identify the reserved storage independently.
+            if (code != 0 && args == 2 && (flags & 0x108) == 8 && (read(m + 16) & 65535) == 8208
+                    && (code & 3) == 0 && read(code) == 0x0000AB1A && read(code + 8) == 0x00040000
+                    && read(code + 12) == 0x00000100
+                    && (read(code + 8204) & 0x00FF00FF) == 0x00040003) {
+                if (payloadCode != 0)
+                    return 22;
+                payloadCode = code;
+            }
+        }
+        result[W_NATIVE_METHOD] = method;
+        result[W_PAYLOAD_CODE] = payloadCode;
+        if (method == 0)
+            return 19;
+        if (carrier == 0)
+            return 20;
+        if (payloadCode == 0)
+            return 21;
+        return 0;
+    }
+    private void restore() {
+        if (!forged)
+            return;
+        boolean restored = true;
+        if (methodChanged) {
+            write(method + 4, 0);
+            if (read(method + 4) != 0)
+                restored = false;
+            methodChanged = false;
+        }
+        if (literalsChanged) {
+            write(carrier + 40, saved0);
+            write(carrier + 48, saved1);
+            write(carrier + 56, saved2);
+            write(carrier + 64, saved3);
+            if (read(carrier + 40) != saved0 || read(carrier + 48) != saved1
+                    || read(carrier + 56) != saved2 || read(carrier + 64) != saved3)
+                restored = false;
+            literalsChanged = false;
+        }
+        if (!restorePayload())
+            restored = false;
+        if (canaryChanged) {
+            target[13] = 0x13579BDF;
+            canaryChanged = false;
+        }
+        // 32-bit wrap: base + 4*0x3fffffff == base-4, the array length word.
+        target[0x3FFFFFFF] = 1;
+        forged = false;
+        if (!restored || target.length != 1)
+            error = 91;
+    }
+    private boolean installPayload(int output) {
+        // Preserve the original table bytes in the existing anchor array.
+        // Native instructions execute from VM-owned code, never the Java heap.
+        int entry = payloadCode + 12;
+        for (int i = 0; i < binary.length; i += 4)
+            codeBackup[i / 4] = read(entry + i);
+        payloadChanged = true;
+        for (int i = 0; i < binary.length; i += 4)
+            write(entry + i, i == bindingOffset ? output : binaryWord(i));
+        // Failed stores must not become an instruction-fetch crash. Cleanup
+        // restores the full backup even if installation only partially worked.
+        for (int i = 0; i < binary.length; i += 4)
+            if (read(entry + i) != (i == bindingOffset ? output : binaryWord(i)))
+                return false;
+        return true;
+    }
+    private boolean restorePayload() {
+        boolean restored = true;
+        if (payloadChanged) {
+            for (int i = 0; i < binary.length; i += 4) {
+                write(payloadCode + 12 + i, codeBackup[i / 4]);
+                if (read(payloadCode + 12 + i) != codeBackup[i / 4])
+                    restored = false;
+            }
+            payloadChanged = false;
+        }
+        return restored;
+    }
+    private boolean alignedRam(int a, int n) {
+        return (a & 3) == 0 && profile.ram(a, n);
+    }
+    private int read(int a) {
+        return target[(a - base) >>> 2];
+    }
+    private void write(int a, int value) {
+        target[(a - base) >>> 2] = value;
+    }
+    private int half(int a) {
+        return (read(a & ~3) >>> ((a & 2) * 8)) & 65535;
+    }
+    private boolean verifyCarrier(int code) {
+        if (read(code + 8) != 0x0A000000)
+            return false;
+        for (int i = 0; i < 10; i++)
+            if (read(code + 12 + i * 8) != expectedCarrierWord(i))
+                return false;
+        return true;
+    }
+    private int binaryWord(int i) {
+        return (binary[i] & 255) | ((binary[i + 1] & 255) << 8) | ((binary[i + 2] & 255) << 16)
+                | (binary[i + 3] << 24);
+    }
+    private byte[] readResource() throws IOException {
+        InputStream in = HeapBoosterSession.class.getResourceAsStream(profile.payloadResource());
+        if (in == null)
+            throw new IOException("Missing payload");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try {
+            byte[] buffer = new byte[512];
+            int count;
+            while ((count = in.read(buffer)) >= 0)
+                if (count > 0)
+                    out.write(buffer, 0, count);
+        } finally {
+            in.close();
+        }
+        return out.toByteArray();
+    }
+    private static int expectedCarrierWord(int index) {
+        // @EXPECTED_CARRIER_WORDS@
+        return 0;
+    }
+    private static int carrierSwitch(int value) {
+        switch (value) {
+            // @CARRIER_CASES@
+            default:
+                return 1;
+        }
+    }
+    private static int payloadSpace(int value, int unused) {
+        switch (value) {
+            // @PAYLOAD_SPACE_CASES@
+            default:
+                return 1;
+        }
+    }
+}

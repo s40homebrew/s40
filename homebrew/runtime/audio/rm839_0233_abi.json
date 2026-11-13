@@ -1,0 +1,58 @@
+{
+  "fw_audio_cm_register": {
+    "address": "0x6358ab51",
+    "prefix": "f0b5140097b005460e4639d0"
+  },
+  "fw_audio_cm_ready": {
+    "address": "0x6358adbf",
+    "prefix": "38b50546fff713f863498000"
+  },
+  "fw_audio_cm_unregister": {
+    "address": "0x6358a2ed",
+    "prefix": "f0b599b00646fff77bfde749"
+  },
+  "fw_audio_cm_send": {
+    "address": "0x6358b559",
+    "prefix": "f7b598b00e46fef745fcba49"
+  },
+  "fw_audio_message_delete": {
+    "address": "0x6358a00f",
+    "prefix": "10b5040007d000f048f90028"
+  },
+  "fw_audio_source_create": {
+    "address": "0x6366771d",
+    "prefix": "4e494a4810b52bf7bbfc10bd"
+  },
+  "fw_audio_source_share": {
+    "address": "0x63619eb1",
+    "prefix": "01ba38b504460091f0490420"
+  },
+  "fw_audio_source_limits": {
+    "address": "0x63667729",
+    "prefix": "0eb5c267816702ba09ba0092"
+  },
+  "fw_audio_source_id": {
+    "address": "0x6361a379",
+    "prefix": "f8b501ba0646009137490420"
+  },
+  "fw_audio_source_forget": {
+    "address": "0x6361a42b",
+    "prefix": "10b504460c48401c0cf6a7f9"
+  },
+  "fw_audio_source_eof": {
+    "address": "0x63619699",
+    "prefix": "1cb50446026905214030002a"
+  },
+  "fw_audio_fragment_init": {
+    "address": "0x6361974b",
+    "prefix": "f0b5040085b00d4616461f46"
+  },
+  "fw_audio_source_write": {
+    "address": "0x63619f4f",
+    "prefix": "7cb5044600ba0d460090c868"
+  },
+  "fw_audio_class_call": {
+    "address": "0x6359309d",
+    "prefix": "f8b50546002000900e462846"
+  }
+}

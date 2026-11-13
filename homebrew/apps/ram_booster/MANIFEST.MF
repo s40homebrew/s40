@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+MIDlet-Name: S40 RAM Booster
+MIDlet-Version: 0.6.3
+MIDlet-Vendor: S40 Homebrew
+MIDlet-1: S40 RAM Booster,,S40RamBooster
+MicroEdition-Configuration: CLDC-1.1
+MicroEdition-Profile: MIDP-2.0
