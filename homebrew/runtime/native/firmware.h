@@ -8,6 +8,20 @@
 #include "firmware_api.h"
 /* Firmware bindings are resolved by Java and installed by the native loader. */
 extern volatile int* fw_lcd_owner;
+/* Plain GDI canvas accepted by native copy/refresh routines. */
+struct fw_gdi_canvas {
+    uint32_t* pixels;
+    uint16_t width, height, stride;
+    uint8_t format, pad;
+    uint32_t extra[3];
+};
+/* Older ARM926 GDI stores dimensions after a reserved pointer-sized field. */
+struct fw_gdi_canvas_legacy {
+    uint32_t* pixels;
+    uint32_t unused;
+    uint16_t width, height;
+    uint8_t format, pad[3];
+};
 void* fw_os_block_alloc_no_wait(unsigned);
 void fw_os_block_dealloc(void*);
 uint32_t fw_os_current_time_read_in_ms(void);

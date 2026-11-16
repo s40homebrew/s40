@@ -11,8 +11,8 @@ final class FirmwareProfiles {
     static final String RM443_BOOTSTRAP = "rm443-getrgb-v1";
     static final String CARRIER_BOOTSTRAP = "s40-getrgb-carrier-v1";
 
-    private static final FirmwareProfile[] SUPPORTED =
-            new FirmwareProfile[] {Rm443Profile.create(), Rm614Profile.create()};
+    private static final FirmwareProfile[] SUPPORTED = new FirmwareProfile[] {
+            Rm443Profile.create(), Rm614Profile.create(), Rm217Profile.create()};
 
     private FirmwareProfiles() {}
 
@@ -31,7 +31,7 @@ final class FirmwareProfiles {
             FirmwareProfile candidate = profiles[i];
             for (int j = 0; j < candidate.platformModels.length; j++) {
                 String expected = candidate.platformModels[j].toLowerCase();
-                if (matchesModel(model, expected)) {
+                if (PlatformIdentity.matches(model, expected)) {
                     if (selected != null) {
                         // Registry order must never decide between two ABIs.
                         return null;
@@ -42,18 +42,5 @@ final class FirmwareProfiles {
             }
         }
         return selected;
-    }
-
-    private static boolean matchesModel(String platform, String expected) {
-        if (!platform.startsWith(expected)) {
-            return false;
-        }
-        if (platform.length() == expected.length()) {
-            return true;
-        }
-        // Firmware suffixes are allowed; model suffixes are not. In particular,
-        // "Nokia6303ci" must not accidentally select the "Nokia6303c" ABI.
-        char separator = platform.charAt(expected.length());
-        return separator == '/' || separator == '-' || separator == ' ';
     }
 }

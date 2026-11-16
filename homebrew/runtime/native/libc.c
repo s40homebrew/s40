@@ -165,7 +165,8 @@ FILE* fopen(const char* path, const char* mode) {
     if (strchr(mode, '+'))
         flags = (flags | 2) & ~1u;
     int fd = fw_filesys_open(p, flags, 384);
-    if (fd <= 0) {
+    // Zero is a valid firmware descriptor (including on RM-217).
+    if (fd < 0) {
         errno = ENOENT;
         return NULL;
     }

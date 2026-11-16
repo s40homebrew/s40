@@ -8,7 +8,7 @@ EXAMPLE=${1:-hello}
 case "$EXAMPLE" in
     ''|*[!a-z0-9_-]*) printf 'Invalid example name: %s\n' "$EXAMPLE" >&2; exit 1 ;;
 esac
-if [[ -f "$PROJECT_DIR/apps/$EXAMPLE/build.sh" ]]; then
+if [[ -z ${S40_APP_DIR:-} && -f "$PROJECT_DIR/apps/$EXAMPLE/build.sh" ]]; then
     exec bash "$PROJECT_DIR/apps/$EXAMPLE/build.sh"
 fi
 EXAMPLE_DIR=${S40_APP_DIR:-$PROJECT_DIR/examples/$EXAMPLE}

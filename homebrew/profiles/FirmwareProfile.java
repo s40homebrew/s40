@@ -15,7 +15,7 @@ final class FirmwareProfile {
     // are discovery windows, not claims about a flash image's exact length.
     final int[] scanWindows;
     final int displayWidth, displayHeight, timerMessageLast, ignoredTimer;
-    final int inputLayout;
+    final int inputLayout, canvasLayout;
     final int specialTimer, taskSpecialCallOffset;
     final int romStart;
     final int romLimit;
@@ -71,6 +71,7 @@ final class FirmwareProfile {
         this.displayWidth = layout.displayWidth;
         this.displayHeight = layout.displayHeight;
         this.inputLayout = layout.inputLayout;
+        this.canvasLayout = layout.canvasLayout;
         this.timerMessageLast = layout.timerMessageLast;
         this.ignoredTimer = layout.ignoredTimer;
         this.specialTimer = layout.specialTimer;
@@ -117,7 +118,7 @@ final class FirmwareProfile {
     static final class Layout {
         int[] scanWindows;
         int displayWidth, displayHeight, timerMessageLast, ignoredTimer;
-        int inputLayout;
+        int inputLayout, canvasLayout;
         int specialTimer = -1, taskSpecialCallOffset = -1;
         int romStart;
         int romLimit;

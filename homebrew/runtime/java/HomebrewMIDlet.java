@@ -33,7 +33,9 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
         return false;
     }
 
-    protected int nativeOptions() { return 0; }
+    protected int nativeOptions() {
+        return 0;
+    }
 
     protected void configureCommands(Displayable target, boolean enabled) {}
 
@@ -165,6 +167,10 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
         long discoveryMs = session.discoveryMs;
         // Application exit statuses may overlap resolver error numbers.
         if (scanOnly || (!session.applicationStarted && error >= 100)) {
+            int bindings = 0;
+            for (int i = 0; i < resolver.api.length; i++)
+                if (resolver.api[i] != 0)
+                    bindings++;
             lines = new String[] {error == 0 && thrown == null ? "FIRMWARE CHECK PASSED"
                                                                : "FIRMWARE CHECK FAILED",
                     thrown == null ? "Check " + error : thrown.toString(),
@@ -176,7 +182,10 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
                             ? "ROM end " + hex(resolver.romStart + resolver.romBytes)
                             : profile.id + " / " + (profile.scanWindows.length / 2)
                                     + " ROM windows",
-                    "Exports " + resolver.exportCount, "System " + hex(resolver.systemDescriptor),
+                    profile.descriptorBytes == 0 ? "Native services " + bindings
+                                                 : "Exports " + resolver.exportCount,
+                    profile.descriptorBytes == 0 ? "Foreground " + hex(resolver.uiRefresh)
+                                                 : "System " + hex(resolver.systemDescriptor),
                     "Cache " + hex(resolver.api[FirmwareApi.CACHE_SYNC]),
                     "KNI get " + hex(resolver.api[FirmwareApi.KNI_PARAM]),
                     "KNI return " + hex(resolver.api[FirmwareApi.KNI_RETURN]),

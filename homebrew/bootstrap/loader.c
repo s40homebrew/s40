@@ -87,8 +87,16 @@ void loader_command(u32* p, const u32* api) {
                 u32* bind = rel + n;
                 for (u32 i = 0; !p[3] && i < bindings; i++) {
                     u32 off = bind[2 * i], id = bind[2 * i + 1];
+                    /* The legacy foreground backend has no master-display
+                     * services. Only its four unused slots may remain NULL;
+                     * every bootstrap/file/event binding is still required. */
+                    int optional_display =
+                            p[FW_CANVAS_LAYOUT_WORD] == FW_CANVAS_LEGACY && p[FW_UI_REFRESH_WORD] &&
+                            (id == API_FW_GDI_DISPLAY_MASTER_RESERVE_ENABLE ||
+                             id == API_FW_GDI_DISPLAY_MASTER_RESERVE_DISABLE ||
+                             id == API_FW_GDI_DISPLAY_MASTER_UPDATE || id == API_FW_LCD_OWNER);
                     if ((off & 3) || off > image - 4 || id >= FW_API_COUNT ||
-                        !p[FW_API_DESCRIPTOR + id] || *(u32*)(base + off)) {
+                        (!p[FW_API_DESCRIPTOR + id] && !optional_display) || *(u32*)(base + off)) {
                         p[3] = 27;
                         break;
                     }

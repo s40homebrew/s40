@@ -199,7 +199,7 @@ final class NativeSession {
             for (int i = n; i < ((n + 3) & ~3); i++)
                 buf[i] = 0;
             for (int i = 0; i < n; i += 4)
-                result[96 + (i >> 2)] = littleEndianWord(buf, i);
+                result[96 + (i >> 2)] = readWordLE(buf, i);
             result[12] = offset;
             result[13] = n;
             loaderCall(2);
@@ -381,6 +381,7 @@ final class NativeSession {
         cacheSync = resolver.api[FirmwareApi.CACHE_SYNC];
         // Native configuration occupies reserved descriptor words before the
         // transfer buffer (96). The same ARM payload serves both displays.
+        result[FirmwareApi.UI_REFRESH_WORD] = resolver.uiRefresh;
         result[FirmwareApi.DISPLAY_WIDTH_WORD] = profile.displayWidth;
         result[FirmwareApi.DISPLAY_HEIGHT_WORD] = profile.displayHeight;
         result[FirmwareApi.TIMER_MESSAGE_LAST_WORD] = profile.timerMessageLast;
@@ -388,6 +389,7 @@ final class NativeSession {
         result[FirmwareApi.SPECIAL_TIMER_WORD] = profile.specialTimer;
         result[FirmwareApi.SPECIAL_TIMER_HANDLER_WORD] = resolver.specialTimerHandler;
         result[FirmwareApi.INPUT_LAYOUT_WORD] = profile.inputLayout;
+        result[FirmwareApi.CANVAS_LAYOUT_WORD] = profile.canvasLayout;
         for (int i = 0; i < FirmwareApi.COUNT; i++)
             result[FirmwareApi.DESCRIPTOR + i] = resolver.api[i];
 
@@ -572,10 +574,17 @@ final class NativeSession {
                     || readWord(code + 16 + i * 8) != ((91 + i * 2) << 24))
                 return false;
         }
-        for (int i = 92; i < 112; i += 4)
-            if (readWord(code + i) != 0xAC03AC03)
+        // KVM quickens executed ireturn bytes to D5/D6 (monitor/plain).
+        // carrierSwitch(0) above executes the default return before discovery.
+        // Keep validating every byte, accepting only those known return forms.
+        for (int i = 92; i < 114; i += 2) {
+            int pair = (readWord((code + i) & ~3) >>> (((code + i) & 2) * 8)) & 65535;
+            int opcode = pair >>> 8;
+            if ((pair & 255) != (i == 112 ? 4 : 3)
+                    || (opcode != 0xAC && opcode != 0xD5 && opcode != 0xD6))
                 return false;
-        return (readWord(code + 112) & 65535) == 0xAC04;
+        }
+        return true;
     }
 
     /**
@@ -738,7 +747,7 @@ final class NativeSession {
     /* ARM instructions and literals are embedded little-endian. The final byte
      * is signed deliberately: shifting it by 24 preserves bit 31, while the
      * lower three bytes are masked to avoid unwanted sign extension. */
-    private static int littleEndianWord(byte[] bytes, int offset) {
+    private static int readWordLE(byte[] bytes, int offset) {
         return (bytes[offset] & 255) | ((bytes[offset + 1] & 255) << 8)
                 | ((bytes[offset + 2] & 255) << 16) | (bytes[offset + 3] << 24);
     }
@@ -746,7 +755,7 @@ final class NativeSession {
     private boolean copyAndBindLoader(byte[] bytes, int[] words, int wordIndex) {
         int patched = 0;
         for (int i = 0; i < bytes.length; i += 4) {
-            int word = littleEndianWord(bytes, i);
+            int word = readWordLE(bytes, i);
             if ((word & 0xFFFF0000) == FirmwareApi.PATCH_MAGIC) {
                 int id = word & 65535;
                 if (id >= FirmwareApi.COUNT || resolver.api[id] == 0)
@@ -769,7 +778,7 @@ final class NativeSession {
             byte[] bytes, int[] words, int wordIndex, int nativeAddress, int nativeLength) {
         int patches = 0;
         for (int i = 0; i < bytes.length; i += 4) {
-            int word = littleEndianWord(bytes, i);
+            int word = readWordLE(bytes, i);
             if (word == 0xDEAD0001) {
                 word = nativeAddress;
                 patches |= 1;

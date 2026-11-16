@@ -21,9 +21,12 @@ CONFIG_WORDS = {
     "SPECIAL_TIMER_HANDLER": 92,
     "INPUT_LAYOUT": 93,
     "LAUNCH_OPTIONS": 94,
+    "CANVAS_LAYOUT": 95,
+    "UI_REFRESH": 85,
 }
 # Runtime policy IDs shared by the profile and native input adapter.
 INPUT_LAYOUTS = {"INPUT_KEYPAD": 0, "INPUT_QWERTY": 1}
+CANVAS_LAYOUTS = {"CANVAS_CURRENT": 0, "CANVAS_LEGACY": 1}
 # These four discovered helpers have ordinary native call veneers. Other
 # dynamic entries use custom comparison veneers or are loader/data pointers.
 DIRECT_INTERNAL_VENEERS = ("fw_msg_count", "fw_vm_timer", "fw_app_id", "fw_event_pop")
@@ -117,7 +120,7 @@ def main():
     for name, word in CONFIG_WORDS.items():
         java.append(f"    static final int {name}_WORD = {word};")
         header.append(f"#define FW_{name}_WORD {word}")
-    for name, value in INPUT_LAYOUTS.items():
+    for name, value in {**INPUT_LAYOUTS, **CANVAS_LAYOUTS}.items():
         java.append(f"    static final int {name} = {value};")
         header.append(f"#define FW_{name} {value}")
     for n, i in ids.items():

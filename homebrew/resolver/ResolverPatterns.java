@@ -22,7 +22,10 @@ final class ResolverPatterns {
     static final int ICACHE_RANGE = 18;
     static final int WRITE_BUFFER = 19;
     static final int DCACHE_ALL = 20;
-    static final int COUNT = 21;
+    static final int UI_REFRESH = 21;
+    static final int UI_COPY = 22;
+    static final int UI_SIGNAL = 23;
+    static final int COUNT = 24;
     // Search 1..7 globally, plus BYTECODE_SYNC on carrier-based profiles.
     static final int SEARCH_COUNT = 8;
 }
