@@ -87,6 +87,8 @@ From the main repository root:
 bash homebrew/build.sh hello
 bash homebrew/build.sh ram_booster
 bash homebrew/build.sh heap_check
+bash homebrew/build.sh battery
+bash homebrew/build.sh pc_bridge
 bash native_time/build.sh
 ```
 
@@ -97,3 +99,22 @@ See the [Doom](https://github.com/s40homebrew/doom),
 [TyrQuake](https://github.com/s40homebrew/tyrquake) and
 [Linux](https://github.com/s40homebrew/linux/tree/s40-linux/s40) guides for
 their builds; run each port's commands from its own repository.
+
+## Focused checks
+
+Public tests exercise maintained code using host execution or compiled ARM with
+explicit service stubs. They need no firmware dumps, private captures or emulator
+checkout. See [the test guide](../homebrew/tests/README.md) and each application's
+README for the checks relevant to a change.
+
+After building the corresponding applications:
+
+```sh
+bash homebrew/apps/ram_booster/tests/check.sh
+python3 native_time/tests/check.py
+python3 homebrew/apps/pc_bridge/tests/test_resident.py
+python3 homebrew/apps/pc_bridge/tests/test_install.py
+```
+
+ARM checks require Python with Unicorn; Java checks use the Java 8 JDK. Individual
+checks document additional tools where needed.

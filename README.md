@@ -4,9 +4,9 @@ Nokia had sold 1.5 billion S40 phones by 2012, yet the platform remained pretty 
 
 This research project brings native homebrew to S40. Run a `.jar` file and it executes ARM/Thumb code on the bare hardware - from there, native applications can call firmware services directly for graphics, input, files, and more. It works by exploiting an integer-overflow bug in S40's `Image.getRGB` implementation that spans S40 2nd–6th Edition (first-generation S40 lacks `Image.getRGB`).
 
-## The catch
+## Compatibility
 
-S40 spans over a decade of phones that vary considerably in hardware (ARM9, ARM11, etc.), the underlying OS, and more. A single `.jar` that picks the right chain and binary for each phone is possible in theory, but getting there will take quite a bit of work.
+S40 phones use different CPUs and firmware interfaces. See the [homebrew guide](homebrew/README.md) for applications and supported models.
 
 ## How it works
 
@@ -144,13 +144,11 @@ Yes, barebones Linux on the Nokia 6303 classic, taking over from the running S40
 
 ### What else?
 
-There's a [RAM Booster](homebrew/apps/ram_booster/README.md) proof of concept that raises the per-app Java heap quota for a few devices, and a [standalone native timer example](native_time/README.md). The best late S40 phones have 128 MB of RAM and a 1 GHz ARM CPU; mid-range devices have roughly 32–64 MB and 200–600 MHz CPUs. Don't expect to run KDE on this.
+[RAM Booster](homebrew/apps/ram_booster/README.md) increases Java app memory, and [PC Bridge](homebrew/apps/pc_bridge/README.md) provides native debugging over PC Suite. See the [homebrew guide](homebrew/README.md) for the other apps and examples.
 
 ### Where is the SDK?
 
-The code in this repo is research-grade, as it was written by LLMs and was never intended to be usable by humans as-is. I hope people can take this research and turn it into a proper SDK.
-
-The [shared SDK](homebrew/README.md), [Hello example](homebrew/examples/hello/README.md), RAM Booster and Native Time are here. Start with the [build guide](docs/building.md). Clone this repository into `main/` beside the separate `doom/`, `tyrquake/` and `linux/` repositories; the build guide includes the checkout commands.
+The [shared SDK](homebrew/README.md) is in `homebrew/`. Start with the [build guide](docs/building.md) for setup and checkout commands.
 
 ## Why?
 
