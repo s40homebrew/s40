@@ -49,10 +49,9 @@ Install the matching JAR/JAD pairs from `homebrew/dist/ram_booster/` and
    quota. Reboot the phone to release any expanded arena and resident hooks.
 
 Already-running apps keep their old quota. Check does not apply a quota.
-**Details** shows discovery, timing and native status; the latest report is
-saved in the `RamBoosterResult` RMS store. A changed memory-view address can
-receive one automatic Check retry after cleanup; Apply is never retried
-automatically. If the result requests a phone restart, reboot before continuing.
+**Details** shows the latest result, also saved in the `RamBoosterResult` RMS
+store. Check may retry once automatically; Apply is never retried automatically.
+If the result requests a phone restart, reboot before continuing.
 
 ## Expansion and Restore
 

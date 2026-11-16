@@ -1,66 +1,61 @@
-# Device profiles and porting
+# Device compatibility
 
-| Runtime profile | Model tokens | Firmware examined | Display |
-| --- | --- | --- | --- |
-| Nokia 6300 / RM-217 | `Nokia6300` | 07.21, 07.30 | 240×320 |
-| Nokia 6303 classic / RM-443 | `Nokia6303c`, `Nokia6303classic` | 08.90, 10.12 | 240×320 |
-| Nokia C3-00 / RM-614 | `NokiaC3-00` | 04.60, 08.63 | 320×240 |
+Shared-launcher apps include profiles for the phones below. A profile chooses
+the discovery rules; the running firmware must still pass validation before
+native code starts. Similar model names do not imply compatibility.
 
-The platform string selects a family. Firmware suffixes do not select address
-tables: the resolver discovers services inside that family's mapped ROM windows.
-Unknown or ambiguous model identities are rejected before bootstrap.
+| Phone | Shared native launcher | Optional PCM audio |
+| --- | --- | --- |
+| Nokia 6300 / RM-217 | 07.21, 07.30; provisional | 07.21, 07.30; provisional |
+| Nokia 6303 classic / RM-443 | 08.90, 10.12 | 10.12; speaker playback supported |
+| Nokia C3-00 / RM-614 | 04.60, 08.63 | 04.60, 08.63; provisional |
+| Asha 302 / RM-813 | No shared launcher | 14.53; standalone binding, provisional |
+| Nokia 301 / RM-839 | No shared launcher | 09.04 standalone binding, provisional; 02.33 explicitly linked Quake adapter |
 
-RM-217 still needs handset testing. C3-00 04.60 and RM-443 have run Doom on
-physical phones. Firmware discovery alone does not establish handset support.
+Provisional support is included but has not been validated on the corresponding
+handset. Native launcher discovery can support other firmware versions in a
+family; audio bindings require the exact listed build. A standalone audio
+binding requires a port to supply its own bootstrap, native services and message
+pump.
 
-## Family differences
+All shared-launcher profiles provide ordinary graphics. The optional accelerated
+RGB565 display and keep-awake request currently support RM-443 10.12; other
+profiles use ordinary output. The 6300 and 6303 screens are 240×320 with a numeric
+keypad; C3-00 is 320×240 with a QWERTY keyboard. Apps choose bindings using the
+reported input layout.
 
-RM-217 covers the original 6300, not the 6300i or 6300 4G. It has a 16 MiB physical
-RAM envelope and no named native export tables. A checked range walker supplies
-ROM bounds; masked instructions and call/literal relationships identify services.
-Its wrapped-cache bootstrap enters the native dispatcher. A 16-byte legacy canvas
-passes opaque 32-bit pixels to the foreground Java refresh helper, which converts
-them to the LCD's 24-bit transfer buffer. The 07.21 and 07.30 firmware use the same
-recipes despite moved function addresses.
+## Standalone utilities
 
-RM-443 discovers its ROM end from a range walker and a zero-terminated range
-table. Its bootstrap uses a wrapped cache-range stage. The display backend
-submits the application buffer directly to the master-display service.
+These apps have their own device requirements; their availability does not add
+a shared native launcher profile.
 
-RM-614 scans two mapped prefixes: `[0x80130400, 0x80EC0000)` and
-`[0x85000400, 0x85900000)`. These fixed windows exclude RAM and the unmapped gap;
-firmware moving required services outside them will fail discovery. Its Java
-switch carrier is synchronized by KVM's bytecode loader. The display backend
-copies into the foreground Java surface and queues its native UI worker.
-C3 also has a different timer policy and keyboard layout, supplied as runtime
-configuration. Firmware 04.60 shares the 08.63 bootstrap, with an instruction
-variant in the special-timer helper.
-
-RM-443 and RM-614 resolve 27 core bindings. RM-217 resolves 23 plus a mandatory
-foreground-refresh callback; four unused master-display bindings remain zero.
-The loader permits those missing bindings only with the legacy canvas policy.
-Descriptor word 85 carries the foreground callback and word 95 the canvas layout.
+- [RAM Booster](../apps/ram_booster/README.md) supports Nokia 301, Asha 302,
+  C2-01, C3-00, 6700 classic, 6300, 6303 classic and Asha 306. Available quotas
+  and expansion behavior differ by model; its guide explains how to use them.
+- [Native Time](../examples/native_time/README.md) supports 6303 classic and
+  Asha 302.
+- [Battery Info](../apps/battery/README.md) and
+  [PC Bridge](../apps/pc_bridge/README.md) require RM-443 10.12.
+- [Heap Check](../apps/heap_check/README.md) is ordinary Java ME and uses no
+  native firmware access.
 
 ## Adding a device
 
-1. Establish the ROM/RAM maps, Java object and method layouts, getRGB behavior,
-   native calling convention and executable-memory/cache rules. Keep firmware,
-   databases and porting evidence outside the public repository.
-2. Add mappings and bounded instruction recipes to `src/java/profiles/RmNNNProfile.java`.
-   Resolve symbols and relationships rather than embedding a table of firmware
-   function addresses. Keep scans within known readable regions.
-3. Verify message/timer dispatch, event packing, display ownership and formats,
-   file services and allocation. Add runtime backends where behavior differs;
-   keep device checks out of applications.
-4. Register a unique model token in `FirmwareProfiles.java`. Exercise discovery
-   against your own firmware, including ambiguous and malformed matches.
-   Public regression tests should exercise maintained code without private inputs.
-5. Test Hello's check/start/exit/relaunch, focus loss and multiple keys in the
-   firmware emulator and on the phone before trying a larger application.
+Begin with a small example before porting a game. Keep firmware dumps, databases
+and device captures outside the public repository.
 
-RAM Booster and Native Time have separate registries. Supporting a phone there
-does not make it a shared-runtime profile. See RAM Booster's
-[porting guide](../apps/ram_booster/docs/porting.md) for its quota and arena-growth
-contracts, and its [device list](../apps/ram_booster/README.md) for available modes.
-Battery Info and PC Bridge use fixed RM-443 10.12 adapters on top of the shared
-bootstrap; they do not extend the runtime's device support.
+1. Establish the device's readable memory regions, Java/native calling
+   conventions and executable-memory rules.
+2. Add a family profile under `src/java/profiles/` and bounded discovery rules
+   under `src/java/resolver/`. Resolve services from validated relationships;
+   do not select a fixed address table from a model string alone.
+3. Verify allocation, file, timer, event and display behavior. Add differences
+   to runtime adapters while keeping application-facing APIs shared.
+4. Register an unambiguous model identity and check malformed or conflicting
+   discovery results. Host regressions should run without private firmware data.
+5. Exercise Hello's check/start/exit/relaunch, focus loss and multiple keys on
+   the target. Add optional video or audio only after the basic session works.
+
+The [architecture guide](architecture.md) explains component responsibilities.
+Private layout and protocol contracts live beside each implementation.
+RAM Booster has a separate [porting guide](../apps/ram_booster/docs/porting.md).

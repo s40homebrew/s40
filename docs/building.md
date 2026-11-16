@@ -1,17 +1,18 @@
-# Building
+# Building applications
 
 On macOS or Linux, install Bash, Python 3, Git, a Java 8 JDK, LLVM with LLD,
 and the Arm GNU `arm-none-eabi` toolchain with newlib. Heap Check and Native
 Time only need the Java tools; RAM Booster also needs LLVM. Native apps use
 newlib/libm/libgcc from Arm GNU Toolchain 15.3.rel2.
 
-## Repository layout
+## Get the sources
 
-Keep the repositories as siblings in a workspace directory:
+Clone the SDK and any ports you want to build. Keep them as siblings so port
+build scripts can find the SDK automatically:
 
 ```text
 workspace/
-  main/       # s40homebrew/s40: docs, SDK, Hello, RAM Booster, Heap Check, Native Time
+  main/       # s40homebrew/s40: SDK, examples and utilities
   doom/       # s40homebrew/doom
   tyrquake/   # s40homebrew/tyrquake
   linux/      # s40homebrew/linux
@@ -79,42 +80,32 @@ Oracle's URL and cookie requirements can change. If the download returns an
 HTML page instead of an archive, use the archive page to sign in and download
 the same file, then continue with extraction and preparation.
 
-## Applications
+## Build and install
 
-From the main repository root:
+Build the Hello example from the main repository root:
 
 ```sh
 bash homebrew/build.sh hello
-bash homebrew/build.sh ram_booster
-bash homebrew/build.sh heap_check
-bash homebrew/build.sh battery
-bash homebrew/build.sh pc_bridge
-bash homebrew/build.sh native_time
 ```
 
-Install the matching JAR/JAD pairs from `homebrew/dist/<app>/` or
-`homebrew/dist/native_time/`.
+Install `homebrew/dist/hello/S40Hello.jar` and its matching JAD on the phone.
+Choose **Check firmware**, then **Start**. Intermediate files are under
+`homebrew/build/hello/`; firmware dumps are not required.
+
+Use another target from the [application catalog](../homebrew/README.md) to
+build a utility or example, such as `bash homebrew/build.sh native_time`.
+Each target writes its JAR/JAD pair to `homebrew/dist/<target>/`. Check
+[device compatibility](../homebrew/docs/devices.md) and the app’s instructions
+before installing.
 
 See the [Doom](https://github.com/s40homebrew/doom),
 [TyrQuake](https://github.com/s40homebrew/tyrquake) and
 [Linux](https://github.com/s40homebrew/linux/tree/s40-linux/s40) guides for
 their builds; run each port's commands from its own repository.
 
-## Focused checks
+## Check a change
 
-Public tests exercise maintained code using host execution or compiled ARM with
-explicit service stubs. They need no firmware dumps, private captures or emulator
-checkout. See [the test guide](../homebrew/tests/README.md) and each application's
-README for the checks relevant to a change.
-
-After building the corresponding applications:
-
-```sh
-bash homebrew/apps/ram_booster/tests/check.sh
-python3 homebrew/examples/native_time/tests/check.py
-python3 homebrew/apps/pc_bridge/tests/test_resident.py
-python3 homebrew/apps/pc_bridge/tests/test_install.py
-```
-
-ARM checks require Python with Unicorn; Java checks use the Java 8 JDK. Individual
-checks document additional tools where needed.
+The [SDK test guide](../homebrew/tests/README.md) lists checks by component and
+application. Run the relevant checks after a build. They use host execution or
+compiled ARM with modeled firmware services and need no private captures or
+emulator checkout.

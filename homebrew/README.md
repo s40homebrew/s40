@@ -1,60 +1,51 @@
 # S40 homebrew SDK
 
-The shared Java launcher, firmware resolver and ARM runtime for Nokia 6300
-(RM-217), 6303 classic (RM-443) and C3-00 (RM-614). Each application includes
-all three profiles and chooses one on the phone. Services are discovered from
-the running firmware.
+Build native applications for Nokia Series 40 with a shared Java launcher,
+firmware discovery and a small C runtime. Applications use the same graphics,
+input, timing, file and audio APIs across the supported device profiles.
+See [device compatibility](docs/devices.md) before installing on a phone.
 
-Start with [build setup](../docs/building.md), then run from the repository root:
+Follow [build setup](../docs/building.md), then build the smallest example:
 
 ```sh
 bash homebrew/build.sh hello
-bash homebrew/build.sh ram_booster
-bash homebrew/build.sh heap_check
-bash homebrew/build.sh battery
-bash homebrew/build.sh pc_bridge
 ```
 
-Native build output goes in `homebrew/build/<app>/`; installable JARs and matching
-JADs go in `homebrew/dist/<app>/`. Builds need no firmware dumps.
+Install the matching JAR and JAD from `homebrew/dist/hello/`. Intermediate output
+is under `homebrew/build/hello/`. Builds do not need firmware dumps.
 
-The [Hello example](examples/hello/README.md) shows native graphics and input.
-[RAM Booster](apps/ram_booster/README.md), [Heap Check](apps/heap_check/README.md),
-[Battery Info](apps/battery/README.md) and [PC Bridge](apps/pc_bridge/README.md)
-are separate utilities. Battery Info and PC Bridge require RM-443 10.12.
-[Native Time](examples/native_time/README.md) is a smaller standalone native-call example.
-Doom, TyrQuake and Linux live in separate repositories and build against this SDK.
+## Examples and utilities
 
-## Source
+Pass the target below to `bash homebrew/build.sh <target>`.
 
-- `src/java/resolver/` and `src/java/profiles/`: firmware discovery, device assumptions and shared
-  ROM-validation helpers. RM-217 uses instruction recipes without named exports.
-- `src/bootstrap/`: native loader, relocation and Java return path.
-- `src/java/launcher/`: MIDlet UI, reversible memory access and native entry.
-- `include/s40/`: application API; `src/native/`: implementation.
-- `src/native/audio/`: Nokia 301 02.33 PCM backend used by TyrQuake.
-- `include/libc/`: the supported C/POSIX compatibility headers.
-- `examples/hello/`: a small graphics/input example.
-- `apps/`: standalone utilities and their app-specific code.
-- `tools/`: code generation, preverification and JAR packaging.
-- `tests/`: host and compiled-code checks without firmware dumps.
+| Application | Target | Purpose |
+| --- | --- | --- |
+| [Hello](examples/hello/README.md) | `hello` | Native graphics and input; start here for a new app |
+| [Native Time](examples/native_time/README.md) | `native_time` | A minimal native call from Java |
+| [RAM Booster](apps/ram_booster/README.md) | `ram_booster` | Increase the memory quota of Java apps |
+| [Heap Check](apps/heap_check/README.md) | `heap_check` | Check Java memory allocation and retention |
+| [Battery Info](apps/battery/README.md) | `battery` | Show battery capacity and charging information |
+| [PC Bridge](apps/pc_bridge/README.md) | `pc_bridge` | Install a native debugging bridge for PC Suite |
 
-Device families keep their layouts and instruction recipes in `Rm*Profile.java`.
-`gen_imports.py` generates shared Java/C constants and native veneers; it does
-not read firmware or generate the resolver.
+Doom, TyrQuake, Gnuboy and Linux are separate projects that use this SDK. Their
+own guides cover assets, controls and installation.
 
-## Guides
+## Develop an application
 
-- [Writing an application](docs/applications.md)
-- [Runtime architecture](docs/architecture.md)
-- [Device profiles and porting](docs/devices.md)
-- [PCM audio](docs/audio.md)
-- [Focused host checks](tests/README.md)
+- [Writing an application](docs/applications.md): entry point, launcher, events,
+  files and build configuration.
+- [Video](docs/video.md) and [audio](docs/audio.md): framebuffer and PCM output.
+- [Architecture](docs/architecture.md): component boundaries and session lifetime.
+- [Device compatibility and porting](docs/devices.md): profiles and optional features.
+- [Host checks](tests/README.md): checks for each SDK component.
 
-Run `python3 homebrew/tools/format.py` from the repository root to format owned
-C, headers, Java and Python, or add `--check`. Generated files are excluded.
-Shell scripts, assembly, manifests and Markdown use manual formatting.
+The public C API is in `include/s40/`; supported C library headers are in
+`include/libc/`. Implementation lives in `src/java/`, `src/bootstrap/` and
+`src/native/`. Apps, examples, build tools and tests have their own directories.
 
-Original code is MIT licensed: [COPYING](COPYING). Linked newlib/libgcc retain
-the notices in `licenses/`, also packaged in generated JARs. Doom retains its
-own GPL license and notices in the Doom repository.
+Run `python3 homebrew/tools/format.py` from the repository root to format C,
+headers, Java and Python, or add `--check`. Generated files are excluded.
+
+Original SDK code is MIT licensed: [COPYING](COPYING). Bundled newlib/libgcc
+notices are in `licenses/` and included in generated JARs. Applications retain
+their own licenses.
