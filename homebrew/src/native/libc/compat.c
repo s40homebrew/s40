@@ -10,7 +10,7 @@
 #include <string.h>
 #include <strings.h>
 
-#include "firmware.h"
+#include "firmware/bindings.h"
 #include "s40/runtime.h"
 int errno;
 int isupper(int c) { return c >= 'A' && c <= 'Z'; }

@@ -1,15 +1,15 @@
 /* SPDX-License-Identifier: MIT
  * Deterministic firmware model. Verifies protocol/ownership, not handset sound.
  * clang -std=c99 -Wall -Wextra -fsanitize=address,undefined
- *   -Ihomebrew/runtime/include homebrew/tests/audio/test_stream.c -o /tmp/s40-audio-test
+ *   -Ihomebrew/include homebrew/tests/audio/test_stream.c -o /tmp/s40-audio-test
  */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../runtime/audio/rm839_0233.c"
-#include "../../runtime/native/audio.c"
+#include "../../src/native/audio/devices/rm839_0233.c"
+#include "../../src/native/audio/core.c"
 
 static unsigned allocations, fail_alloc, clock_ms, active_object, plays, closes;
 static int failure; /* 1 policy rejection, 2 open rejection, 3 play timeout */

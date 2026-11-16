@@ -24,8 +24,8 @@ general native library lookup API are not implemented.
 
 ## Responsibilities
 
-`resolver/` finds exports and checked instruction relationships within the selected
-profile's ROM windows. `profiles/` supplies model-family assumptions: ROM/RAM maps,
+`src/java/resolver/` finds exports and checked instruction relationships within the selected
+profile's ROM windows. `src/java/profiles/` supplies model-family assumptions: ROM/RAM maps,
 masked recipes, KVM/native relationships, display dimensions, input layout and
 message/timer policy. Model-name matching selects a candidate, not proof of support.
 ROM validation must succeed before a native application can start. Each device
@@ -43,10 +43,10 @@ getRGB, the reversible heap view, native bindings, carrier and resource streamin
 Its native methods must remain on its concrete class: the bootstrap inspects that
 class's KVM method table. Do not allocate or call UI code while the view is forged.
 
-`bootstrap/` owns the native loader and KNI entry/return mechanics. `runtime/native/`
+`src/bootstrap/` owns the native loader and KNI entry/return mechanics. `src/native/`
 owns `native_main`, session lifetime, message dispatch, the master display, native
 clock, event polling, tracked allocations and file handles. Its public entry points
-are in `runtime/include/s40/`; `firmware.h` and `fw_*` veneers are implementation
+are in `include/s40/`; `firmware.h` and `fw_*` veneers are implementation
 details.
 
 An application provides `int s40_app_main(void)` and owns its controls and assets.
@@ -95,7 +95,7 @@ The pinned Java `int[]` is a command/result descriptor. Important word groups:
 | 4–10 | Native diagnostics; 5/8/9 may carry application detail |
 | 11–15 | Image size, transfer/relocation metadata, entry and binding count |
 | 16–79 | Error text storage |
-| 80–84, 86 | Temporary bootstrap/loader state |
+| 80–84, 86 | Temporary src/bootstrap/loader state |
 | 85 | Optional native foreground-refresh callback |
 | 87–88 | Display width/height |
 | 89–92 | Timer policy and discovered special handler |

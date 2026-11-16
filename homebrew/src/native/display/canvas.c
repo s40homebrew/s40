@@ -2,7 +2,7 @@
 /* Audited S40 master-display ABI, shared by native applications. */
 #include <stdlib.h>
 
-#include "firmware.h"
+#include "firmware/bindings.h"
 #include "s40/runtime.h"
 
 static int reserve_token = -1;

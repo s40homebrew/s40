@@ -46,7 +46,7 @@ Descriptor word 85 carries the foreground callback and word 95 the canvas layout
 1. Establish the ROM/RAM maps, Java object and method layouts, getRGB behavior,
    native calling convention and executable-memory/cache rules. Keep firmware,
    databases and porting evidence outside the public repository.
-2. Add mappings and bounded instruction recipes to `profiles/RmNNNProfile.java`.
+2. Add mappings and bounded instruction recipes to `src/java/profiles/RmNNNProfile.java`.
    Resolve symbols and relationships rather than embedding a table of firmware
    function addresses. Keep scans within known readable regions.
 3. Verify message/timer dispatch, event packing, display ownership and formats,

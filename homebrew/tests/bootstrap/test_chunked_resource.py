@@ -209,7 +209,7 @@ class ChunkedResources(unittest.TestCase):
                     javac,
                     "-d",
                     str(folder),
-                    str(ROOT / "runtime/java/ChunkedResourceInputStream.java"),
+                    str(ROOT / "src/java/launcher/ChunkedResourceInputStream.java"),
                     str(test),
                 ],
                 check=True,

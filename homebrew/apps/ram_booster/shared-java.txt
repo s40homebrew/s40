@@ -1,4 +1,4 @@
-profiles/PlatformIdentity.java
-profiles/Rm217Memory.java
-resolver/RomRecipe.java
-resolver/RomRanges.java
+src/java/profiles/PlatformIdentity.java
+src/java/profiles/Rm217Memory.java
+src/java/resolver/RomRecipe.java
+src/java/resolver/RomRanges.java

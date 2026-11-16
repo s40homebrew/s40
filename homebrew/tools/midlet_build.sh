@@ -5,7 +5,7 @@
 B=${S40_BUILD_DIR:-$P/build/$APP}
 D=${S40_DIST_DIR:-$P/dist/$APP}
 source "$R/tools/env.sh"
-python3 "$R/scripts/clean_build_outputs.py" java "$P" "$B" "build/$APP" "${A:-$P}"
+python3 "$R/tools/clean_build_outputs.py" java "$P" "$B" "build/$APP" "${A:-$P}"
 mkdir -p "$B/classes" "$B/preverified" "$D"
 
 compile_midlet() {

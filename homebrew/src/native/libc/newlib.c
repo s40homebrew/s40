@@ -6,7 +6,7 @@
 #include <errno.h>
 #include <stdlib.h>
 
-#include "firmware.h"
+#include "firmware/bindings.h"
 #include "s40/runtime.h"
 void* _malloc_r(void* r, size_t n) {
     (void)r;

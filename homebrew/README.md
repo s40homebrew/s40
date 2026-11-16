@@ -27,13 +27,13 @@ Doom, TyrQuake and Linux live in separate repositories and build against this SD
 
 ## Source
 
-- `resolver/` and `profiles/`: firmware discovery, device assumptions and shared
+- `src/java/resolver/` and `src/java/profiles/`: firmware discovery, device assumptions and shared
   ROM-validation helpers. RM-217 uses instruction recipes without named exports.
-- `bootstrap/`: native loader, relocation and Java return path.
-- `runtime/java/`: MIDlet UI, reversible memory access and native entry.
-- `runtime/include/s40/`: application API; `runtime/native/`: implementation.
-- `runtime/audio/`: Nokia 301 02.33 PCM backend used by TyrQuake.
-- `runtime/libc/include/`: the supported C/POSIX compatibility headers.
+- `src/bootstrap/`: native loader, relocation and Java return path.
+- `src/java/launcher/`: MIDlet UI, reversible memory access and native entry.
+- `include/s40/`: application API; `src/native/`: implementation.
+- `src/native/audio/`: Nokia 301 02.33 PCM backend used by TyrQuake.
+- `include/libc/`: the supported C/POSIX compatibility headers.
 - `examples/hello/`: a small graphics/input example.
 - `apps/`: standalone utilities and their app-specific code.
 - `tools/`: code generation, preverification and JAR packaging.

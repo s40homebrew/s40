@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts/clean_build_outputs.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "tools/clean_build_outputs.py"
 spec = importlib.util.spec_from_file_location("clean_build_outputs", SCRIPT)
 cleanup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cleanup)

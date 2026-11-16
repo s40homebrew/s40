@@ -2,7 +2,7 @@
 #include <stddef.h>
 
 #include "control.h"
-#include "firmware.h"
+#include "firmware/bindings.h"
 #include "resident_image.h"
 #include "s40/runtime.h"
 

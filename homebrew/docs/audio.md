@@ -1,10 +1,10 @@
 # Native PCM audio
 
-`runtime/include/s40/audio.h` is the shared, engine-independent PCM interface.
-`runtime/native/audio.c` owns driver selection; runtime shutdown closes audio
+`include/s40/audio.h` is the shared, engine-independent PCM interface.
+`src/native/audio.c` owns driver selection; runtime shutdown closes audio
 before releasing application memory. Quake uses these same sources directly.
 
-The first adapter is `runtime/audio/rm839_0233.c`, for **Nokia 301 RM-839,
+The first adapter is `src/native/audio/rm839_0233.c`, for **Nokia 301 RM-839,
 firmware 02.33 only**. Speaker playback works on the handset; the current
 buffering and pacing changes still need handset latency/underrun testing.
 RM-443/RM-614 shared launchers do not bind this adapter. On those profiles,
@@ -68,7 +68,7 @@ application's message pump and removed before native return.
 
 ## RM-839 02.33 backend
 
-`runtime/audio/rm839_0233_abi.json` records exact Thumb addresses and ROM
+`src/native/audio/rm839_0233_abi.json` records exact Thumb addresses and ROM
 prefixes. The Quake import generator consumes it alongside the port's core ABI.
 The bindings and class layout are specific to that firmware.
 
