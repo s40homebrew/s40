@@ -11,23 +11,17 @@ final class Rm614Profile {
 
     static FirmwareProfile create() {
         FirmwareProfile.Layout layout = new FirmwareProfile.Layout();
+        layout.useKvmDiscovery();
+        layout.useLibraryDescriptors();
         layout.romStart = 0x80130400;
         layout.romLimit = 0x80F00000;
         layout.ramStart = 0x80F00000;
         layout.ramLimit = 0x84000000;
-        layout.bootBytes = 65536;
-        layout.romPageMask = 4095;
         // Conservative page-aligned prefixes wholly present in the audited
         // 04.60, 08.63 and 08.70 images. Do not scan RAM, the bank gap, or assume that
         // a flash container's padded EOF is a runtime memory-map boundary.
         // A future firmware with services outside these windows fails closed.
         layout.scanWindows = new int[] {0x80130400, 0x80EC0000, 0x85000400, 0x85900000};
-        layout.descriptorBytes = 36;
-        layout.descriptorHashOffset = 24;
-        layout.descriptorStringsOffset = 28;
-        layout.descriptorSymbolsOffset = 32;
-        layout.kniReturnSearchRadius = 4096;
-        layout.kniParamReturnOffset = 12;
         layout.kniReturnSpLdrOffset = 4;
         layout.taskReceiveCallOffset = 0;
         layout.taskVmTimerCallOffset = 24;
@@ -36,8 +30,6 @@ final class Rm614Profile {
         layout.taskInternalQueueCallOffset = 66;
         layout.taskMsgCountCallOffset = 70;
         layout.taskSubscriptionsCallOffset = 90;
-        layout.invokeBranchOffset = 24;
-        layout.dispatchNativeEntryOffset = 48;
         layout.lcdReserveOwnerLdrOffset = 16;
         layout.lcdUpdateOwnerLdrOffset = 2;
         layout.lcdOwnerLiteralBias = 4;
@@ -47,6 +39,7 @@ final class Rm614Profile {
         layout.lcdReleaseCallOffset = 134;
         layout.displayWidth = 320;
         layout.displayHeight = 240;
+        layout.canvasLayout = FirmwareApi.CANVAS_CURRENT;
         layout.inputLayout = FirmwareApi.INPUT_QWERTY;
         layout.timerMessageLast = 450;
         layout.ignoredTimer = -1;

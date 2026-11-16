@@ -1,82 +1,114 @@
 /* SPDX-License-Identifier: MIT */
-/* Small position-independent loader, copied into the same int[] carrier as
- * the already emulator-tested OS-info payload. Never calls the application until
- * all chunks and relocations have been checked and KVM metadata restored.
+/* Position-independent loader, initially entered through a Java int[] carrier
+ * and then copied to OS-owned storage. Enter the application only after all
+ * chunks and relocations have been checked and KVM metadata restored.
  */
 typedef unsigned int u32;
 #include "firmware_api.h"
 #include "native_limits.h"
-#define CALL(type, index) ((type)api[index])
-#define MAGIC 0x444F4F4D
+/* loader.S lays out these five callable services in this exact order. */
+typedef struct {
+    void (*kni_param)(unsigned, void*);
+    void (*kni_return)(void);
+    void* (*allocate)(u32);
+    void (*release)(void*);
+    void (*synchronize)(void*, u32);
+} loader_services;
+/* C function-pointer layout must match the assembly's patched word table. */
+#define CHECK_LOADER_SERVICE(field, slot)                                              \
+    _Static_assert(__builtin_offsetof(loader_services, field) == FW_WORD_OFFSET(slot), \
+                   "loader service ABI: " #field)
+CHECK_LOADER_SERVICE(kni_param, FW_LOADER_API_KNI_PARAM);
+CHECK_LOADER_SERVICE(kni_return, FW_LOADER_API_KNI_RETURN);
+CHECK_LOADER_SERVICE(allocate, FW_LOADER_API_ALLOCATE);
+CHECK_LOADER_SERVICE(release, FW_LOADER_API_FREE);
+CHECK_LOADER_SERVICE(synchronize, FW_LOADER_API_CACHE_SYNC);
+_Static_assert(sizeof(loader_services) == FW_WORD_OFFSET(FW_LOADER_API_COUNT),
+               "loader service table size");
+#undef CHECK_LOADER_SERVICE
 extern void on_native_stack(void*, void*, u32*);
-void loader_command(u32* p, const u32* api) {
-    u32 op = p[1];
-    unsigned char* base = (unsigned char*)p[2];
-    p[0] = MAGIC;
-    p[3] = 0;
-    if (op == 0) {
+void loader_command(u32* p, const loader_services* api) {
+    u32 op = p[FW_RESULT_COMMAND_WORD];
+    unsigned char* base = (unsigned char*)p[FW_RESULT_IMAGE_WORD];
+    p[FW_RESULT_MAGIC_WORD] = FW_RESULT_MAGIC;
+    p[FW_RESULT_STATUS_WORD] = FW_STATUS_OK;
+    if (op == FW_COMMAND_INSTALL) {
         /* Move the callable loader out of Java's heap before resource I/O can
          * allocate or collect. Internal branches/literals are PC-relative. */
-        if (!p[80] || !p[82] || !p[83] || p[83] > 3072 || p[84]) {
-            p[3] = 20;
+        if (!p[FW_RESULT_METHOD_SLOT_WORD] || !p[FW_RESULT_LOADER_SOURCE_WORD] ||
+            !p[FW_RESULT_LOADER_BYTES_WORD] ||
+            p[FW_RESULT_LOADER_BYTES_WORD] > FW_LOADER_MAX_BYTES ||
+            p[FW_RESULT_RESIDENT_LOADER_WORD]) {
+            p[FW_RESULT_STATUS_WORD] = FW_STATUS_BOOTSTRAP_BOUNDS;
             return;
         }
-        unsigned char* self = CALL(void* (*)(u32), 2)(p[83]);
+        unsigned char* self = api->allocate(p[FW_RESULT_LOADER_BYTES_WORD]);
         if (!self) {
-            p[3] = 22;
+            p[FW_RESULT_STATUS_WORD] = FW_STATUS_ALLOCATION_FAILED;
             return;
         }
-        for (u32 i = 0; i < p[83]; i++)
-            self[i] = ((unsigned char*)p[82])[i];
-        CALL(void (*)(void*, u32), 4)(self, p[83]);
-        p[84] = (u32)self;
-        *(volatile u32*)p[80] = (u32)self;
+        for (u32 i = 0; i < p[FW_RESULT_LOADER_BYTES_WORD]; i++)
+            self[i] = ((unsigned char*)p[FW_RESULT_LOADER_SOURCE_WORD])[i];
+        api->synchronize(self, p[FW_RESULT_LOADER_BYTES_WORD]);
+        p[FW_RESULT_RESIDENT_LOADER_WORD] = (u32)self;
+        *(volatile u32*)p[FW_RESULT_METHOD_SLOT_WORD] = (u32)self;
         return;
     }
-    if (op == 1) {
-        if (base || !p[11] || p[11] > S40_NATIVE_ALLOCATION_LIMIT) {
-            p[3] = 21;
+    if (op == FW_COMMAND_ALLOCATE) {
+        if (base || !p[FW_RESULT_ALLOCATION_BYTES_WORD] ||
+            p[FW_RESULT_ALLOCATION_BYTES_WORD] > S40_NATIVE_ALLOCATION_LIMIT) {
+            p[FW_RESULT_STATUS_WORD] = FW_STATUS_ALLOCATION_BOUNDS;
             return;
         }
-        base = CALL(void* (*)(u32), 2)(p[11]);
+        base = api->allocate(p[FW_RESULT_ALLOCATION_BYTES_WORD]);
         if (!base) {
-            p[3] = 22;
+            p[FW_RESULT_STATUS_WORD] = FW_STATUS_ALLOCATION_FAILED;
             return;
         }
-        p[2] = (u32)base;
-        for (u32 i = 0; i < p[11]; i++)
+        p[FW_RESULT_IMAGE_WORD] = (u32)base;
+        for (u32 i = 0; i < p[FW_RESULT_ALLOCATION_BYTES_WORD]; i++)
             base[i] = 0;
         return;
     }
-    if (op == 2) {
-        if (!base || p[13] > 4096 || p[12] > p[11] || p[13] > p[11] - p[12]) {
-            p[3] = 23;
+    if (op == FW_COMMAND_TRANSFER) {
+        if (!base || p[FW_RESULT_TRANSFER_BYTES_WORD] > FW_TRANSFER_BYTES ||
+            p[FW_RESULT_TRANSFER_OFFSET_WORD] > p[FW_RESULT_ALLOCATION_BYTES_WORD] ||
+            p[FW_RESULT_TRANSFER_BYTES_WORD] >
+                    p[FW_RESULT_ALLOCATION_BYTES_WORD] - p[FW_RESULT_TRANSFER_OFFSET_WORD]) {
+            p[FW_RESULT_STATUS_WORD] = FW_STATUS_TRANSFER_BOUNDS;
             return;
         }
-        unsigned char* src = (unsigned char*)(p + 96);
-        for (u32 i = 0; i < p[13]; i++)
-            base[p[12] + i] = src[i];
+        unsigned char* src = (unsigned char*)(p + FW_RESULT_TRANSFER_WORD);
+        for (u32 i = 0; i < p[FW_RESULT_TRANSFER_BYTES_WORD]; i++)
+            base[p[FW_RESULT_TRANSFER_OFFSET_WORD] + i] = src[i];
         return;
     }
-    if (op == 3 || op == 4) {
+    if (op == FW_COMMAND_RUN || op == FW_COMMAND_ABORT) {
         /* Clear our own KVM binding while still running: the dispatcher has
          * already loaded its target, so normal return remains valid. */
-        if (p[80]) {
-            *(volatile u32*)p[80] = 0;
-            p[80] = 0;
+        if (p[FW_RESULT_METHOD_SLOT_WORD]) {
+            *(volatile u32*)p[FW_RESULT_METHOD_SLOT_WORD] = 0;
+            p[FW_RESULT_METHOD_SLOT_WORD] = 0;
         }
-        if (op == 3 && base) {
-            u32 image = p[12], n = p[13], bindings = p[15];
-            if (image < 4 || (image & 3) || image > p[11] || n > (p[11] - image) / 4 ||
-                bindings > (p[11] - image - 4 * n) / 8 ||
-                p[11] - image - 4 * n - 8 * bindings < 196608 || p[14] >= image)
-                p[3] = 24;
+        if (op == FW_COMMAND_RUN && base) {
+            u32 image = p[FW_RESULT_IMAGE_BYTES_WORD], n = p[FW_RESULT_RELOCATION_COUNT_WORD],
+                bindings = p[FW_RESULT_BINDING_COUNT_WORD];
+            if (image < FW_WORD_BYTES || (image & (FW_WORD_BYTES - 1)) ||
+                image > p[FW_RESULT_ALLOCATION_BYTES_WORD] ||
+                n > (p[FW_RESULT_ALLOCATION_BYTES_WORD] - image) / FW_RELOCATION_BYTES ||
+                bindings > (p[FW_RESULT_ALLOCATION_BYTES_WORD] - image - FW_WORD_BYTES * n) /
+                                   FW_BINDING_BYTES ||
+                p[FW_RESULT_ALLOCATION_BYTES_WORD] - image - FW_WORD_BYTES * n -
+                                FW_BINDING_BYTES * bindings <
+                        FW_IMAGE_STACK_BYTES ||
+                p[FW_RESULT_ENTRY_OFFSET_WORD] >= image)
+                p[FW_RESULT_STATUS_WORD] = FW_STATUS_IMAGE_BOUNDS;
             else {
                 u32* rel = (u32*)(base + image);
                 for (u32 i = 0; i < n; i++) {
                     u32 off = rel[i];
-                    if ((off & 3) || off > image - 4) {
-                        p[3] = 25;
+                    if ((off & (FW_WORD_BYTES - 1)) || off > image - FW_WORD_BYTES) {
+                        p[FW_RESULT_STATUS_WORD] = FW_STATUS_RELOCATION;
                         break;
                     }
                     *(u32*)(base + off) += (u32)base;
@@ -85,7 +117,7 @@ void loader_command(u32* p, const u32* api) {
                  * validated before dereferencing the resolved descriptor table.
                  * Code/literal changes are synchronized together below. */
                 u32* bind = rel + n;
-                for (u32 i = 0; !p[3] && i < bindings; i++) {
+                for (u32 i = 0; !p[FW_RESULT_STATUS_WORD] && i < bindings; i++) {
                     u32 off = bind[2 * i], id = bind[2 * i + 1];
                     /* The legacy foreground backend has no master-display
                      * services. Only its four unused slots may remain NULL;
@@ -95,23 +127,25 @@ void loader_command(u32* p, const u32* api) {
                             (id == API_FW_GDI_DISPLAY_MASTER_RESERVE_ENABLE ||
                              id == API_FW_GDI_DISPLAY_MASTER_RESERVE_DISABLE ||
                              id == API_FW_GDI_DISPLAY_MASTER_UPDATE || id == API_FW_LCD_OWNER);
-                    if ((off & 3) || off > image - 4 || id >= FW_API_COUNT ||
-                        (!p[FW_API_DESCRIPTOR + id] && !optional_display) || *(u32*)(base + off)) {
-                        p[3] = 27;
+                    if ((off & (FW_WORD_BYTES - 1)) || off > image - FW_WORD_BYTES ||
+                        id >= FW_API_COUNT || (!p[FW_API_DESCRIPTOR + id] && !optional_display) ||
+                        *(u32*)(base + off)) {
+                        p[FW_RESULT_STATUS_WORD] = FW_STATUS_IMPORT;
                         break;
                     }
                     *(u32*)(base + off) = p[FW_API_DESCRIPTOR + id];
                 }
-                if (!p[3]) {
-                    CALL(void (*)(void*, u32), 4)(base, image);
-                    on_native_stack(base + p[14], base + p[11], p);
+                if (!p[FW_RESULT_STATUS_WORD]) {
+                    api->synchronize(base, image);
+                    on_native_stack(base + p[FW_RESULT_ENTRY_OFFSET_WORD],
+                                    base + p[FW_RESULT_ALLOCATION_BYTES_WORD], p);
                 }
             }
         }
         if (base)
-            CALL(void (*)(void*), 3)(base);
-        p[2] = 0;
+            api->release(base);
+        p[FW_RESULT_IMAGE_WORD] = 0;
         return;
     }
-    p[3] = 26;
+    p[FW_RESULT_STATUS_WORD] = FW_STATUS_COMMAND;
 }

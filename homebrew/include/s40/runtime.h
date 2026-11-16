@@ -24,6 +24,10 @@ void s40_sleep_ms(uint32_t duration);
 unsigned s40_input_layout(void);
 /* Application-defined bits supplied by the Java launcher's nativeOptions(). */
 uint32_t s40_launch_options(void);
+/* Optional launcher UTF-8 string (max 4095 bytes), valid until session exit.
+ * Empty when the launcher supplies none. Do not modify or free this storage.
+ */
+const char* s40_launch_argument(void);
 unsigned s40_display_width(void);
 unsigned s40_display_height(void);
 /* Packed native-sized 0xFFRRGGBB buffer, owned by the runtime. */
@@ -36,7 +40,7 @@ const char* s40_get_root(void);
 void s40_set_log(FILE* file);
 void s40_log_close(void);
 /* Low-level session diagnostics, not a stable application storage area.
- * See docs/architecture.md for the current descriptor contract.
+ * The descriptor layout is defined by tools/native_contract.py.
  */
 extern uint32_t* s40_result;
 #endif

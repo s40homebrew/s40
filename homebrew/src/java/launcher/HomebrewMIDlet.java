@@ -37,6 +37,11 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
         return 0;
     }
 
+    /** Optional UTF-8 argument, commonly a selected native file path. */
+    protected String nativeArgument() {
+        return "";
+    }
+
     protected void configureCommands(Displayable target, boolean enabled) {}
 
     protected final void refreshInstructions() {
@@ -111,7 +116,7 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
                 "Checking firmware...", "ROM bounds, exports, native ABI", "Please wait."};
         screen.repaint();
         screen.serviceRepaints();
-        session.execute(scanOnly, nativeOptions());
+        session.execute(scanOnly, nativeOptions(), nativeArgument());
         running = false;
         screen.addCommand(queryCommand);
         screen.addCommand(checkCommand);
@@ -199,8 +204,9 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
             return;
         }
         StringBuffer message = new StringBuffer();
-        for (int i = 0; i < 256; i++) {
-            int c = (result[16 + (i >> 2)] >>> ((i & 3) * 8)) & 255;
+        for (int i = 0; i < NativeProtocol.ERROR_TEXT_BYTES; i++) {
+            int c = (result[NativeProtocol.RESULT_ERROR_TEXT_WORD + (i >> 2)] >>> ((i & 3) * 8))
+                    & 255;
             if (c == 0)
                 break;
             message.append((char) c);
@@ -210,17 +216,20 @@ public abstract class HomebrewMIDlet extends MIDlet implements CommandListener {
         lines[0] = error == 0 && thrown == null ? "NATIVE APPLICATION RETURNED"
                                                 : "NATIVE APPLICATION FAILED";
         lines[1] = thrown == null ? "Check " + error : thrown.toString();
-        lines[2] = "Stage " + result[4] + " detail " + result[5];
-        lines[3] = "Task " + result[6] + " app " + result[7];
-        lines[4] = "Last key " + result[8] + " type " + result[9];
-        lines[5] = "Native ms " + result[10];
+        lines[2] = "Stage " + result[NativeProtocol.RESULT_PHASE_WORD] + " detail "
+                + result[NativeProtocol.RESULT_DETAIL0_WORD];
+        lines[3] = "Task " + result[NativeProtocol.RESULT_TASK_ID_WORD] + " app "
+                + result[NativeProtocol.RESULT_APP_ID_WORD];
+        lines[4] = "Last key " + result[NativeProtocol.RESULT_DETAIL1_WORD] + " type "
+                + result[NativeProtocol.RESULT_DETAIL2_WORD];
+        lines[5] = "Native ms " + result[NativeProtocol.RESULT_ELAPSED_MS_WORD];
         if (error == 12) {
-            lines[2] = "Cache flags " + hex(result[7]);
-            lines[3] = "Loader flags " + hex(result[8]);
-            lines[4] = "Cache code " + hex(result[9]);
-            lines[5] = "Loader code " + hex(result[10]);
+            lines[2] = "Cache flags " + hex(result[NativeProtocol.BOOTSTRAP_CACHE_FLAGS_WORD]);
+            lines[3] = "Loader flags " + hex(result[NativeProtocol.BOOTSTRAP_QUERY_FLAGS_WORD]);
+            lines[4] = "Cache code " + hex(result[NativeProtocol.BOOTSTRAP_CACHE_CODE_WORD]);
+            lines[5] = "Loader code " + hex(result[NativeProtocol.BOOTSTRAP_QUERY_CODE_WORD]);
         } else if (error == 18) {
-            lines[2] = "Loader status " + result[3];
+            lines[2] = "Loader status " + result[NativeProtocol.RESULT_STATUS_WORD];
         }
         for (int i = 6; i < 14; i++) {
             int start = (i - 6) * 32;

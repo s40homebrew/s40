@@ -20,6 +20,24 @@ public final class CheckProfiles {
         FirmwareProfile classic = FirmwareProfiles.select("Nokia6300/07.21");
         require(classic != null && classic.id.equals("RM-217"), "6300 profile");
         require(FirmwareProfiles.select("Nokia6300/06.60") == classic, "6300 firmware independent");
+        // Shared builders must not flatten the distinct native/bootstrap ABIs.
+        require(expected.descriptorBytes == 36 && c3.descriptorBytes == 36
+                        && classic.descriptorBytes == 0,
+                "Library descriptor policies");
+        require(expected.kniReturnSpLdrOffset == 4 && c3.kniReturnSpLdrOffset == 4
+                        && classic.kniReturnSpLdrOffset == 2,
+                "KNI variant relationships");
+        require(c3.specialTimer == 76 && c3.taskSpecialCallOffset == 50
+                        && c3.canvasLayout == FirmwareApi.CANVAS_CURRENT
+                        && classic.canvasLayout == FirmwareApi.CANVAS_LEGACY,
+                "Carrier timer and legacy canvas policies");
+        require(expected.ramRange(expected.ramStart, 4)
+                        && expected.ramRange(expected.ramLimit - 4, 4)
+                        && !expected.ramRange(expected.ramStart - 4, 4)
+                        && !expected.ramRange(expected.ramLimit - 4, 8)
+                        && !expected.ramRange(expected.ramStart + 1, 4)
+                        && !expected.ramRange(expected.ramStart, -4),
+                "Aligned RAM record bounds");
         String[] unsupported = {null, "", "generic", "j2me", "Nokia6303ci/10.12", "Nokia6303cExtra",
                 "Nokia6300i/07.21", "Nokia6300 4G", "Nokia6300-4G", "Nokia6300-1extra/07.30",
                 "Nokia6300 07..30", "Nokia6300 07.30.", "Nokia6300 .07.30", "OtherNokia6303c/10.12",

@@ -14,6 +14,11 @@ typedef struct {
  * metadata, not a physical key identity. Consumers decide their own bindings.
  */
 static inline int s40_event_key(const s40_event* event) { return (int16_t)event->value; }
+/* Modifier byte carried by QWERTY keyboard events. The intervening byte is
+ * device metadata and is deliberately not interpreted as a key identifier. */
+static inline unsigned s40_event_modifiers(const s40_event* event) {
+    return (uint32_t)event->value >> 24;
+}
 
 enum {
     S40_EVENT_KEYBOARD = 1,

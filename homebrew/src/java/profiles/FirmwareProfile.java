@@ -114,6 +114,13 @@ final class FirmwareProfile {
         this.lcdReleaseCallOffset = layout.lcdReleaseCallOffset;
     }
 
+    /** Bounds check for aligned native records; safe during the forged-heap interval. */
+    boolean ramRange(int address, int bytes) {
+        int offset = address - ramStart;
+        return (address & (NativeProtocol.WORD_BYTES - 1)) == 0 && offset >= 0 && bytes > 0
+                && offset <= ramLimit - ramStart - bytes;
+    }
+
     /** Named construction fields. A profile factory fills every group explicitly. */
     static final class Layout {
         int[] scanWindows;
@@ -156,5 +163,34 @@ final class FirmwareProfile {
         int lcdReleaseIdOffset;
         int lcdAcquireCallOffset;
         int lcdReleaseCallOffset;
+
+        /** Common KVM discovery relationships, not default firmware addresses. */
+        void useKvmDiscovery() {
+            bootBytes = 64 * 1024;
+            romPageMask = 4096 - 1;
+            kniReturnSearchRadius = 4096;
+            kniParamReturnOffset = 12;
+            invokeBranchOffset = 24;
+            dispatchNativeEntryOffset = 48;
+        }
+
+        /** RM-443/RM-217 boot range-walker ABI. */
+        void useRomRangeTable() {
+            rangeTableLdrOffset = 14;
+            rangeEntryBytes = 2 * NativeProtocol.WORD_BYTES;
+            rangeEndOffset = NativeProtocol.WORD_BYTES;
+            rangeMinTableBytes = 3 * rangeEntryBytes;
+            rangeMaxEntries = 8;
+            rangeRegionMask = 0xF0000000;
+            rangeRomRegion = 0xF0000000;
+        }
+
+        /** Built-in library descriptor present on RM-443 and RM-614. */
+        void useLibraryDescriptors() {
+            descriptorBytes = 9 * NativeProtocol.WORD_BYTES;
+            descriptorHashOffset = 6 * NativeProtocol.WORD_BYTES;
+            descriptorStringsOffset = 7 * NativeProtocol.WORD_BYTES;
+            descriptorSymbolsOffset = 8 * NativeProtocol.WORD_BYTES;
+        }
     }
 }

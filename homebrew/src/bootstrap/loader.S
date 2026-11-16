@@ -12,28 +12,28 @@ native_entry:
     adr r5, loader_api
     mov r0,#1
     mov r1,sp
-    ldr r2,[r5,#0]
+    ldr r2,[r5,#FW_WORD_OFFSET(FW_LOADER_API_KNI_PARAM)]
     blx r2
     ldr r0,[sp]
     cmp r0,#0
-    addne r0,r0,#12
+    addne r0,r0,#FW_KVM_ARRAY_DATA_BYTES
     mov r4,r0
     mov r1,r5
     blne loader_command
-    ldr r2,[r5,#4]
+    ldr r2,[r5,#FW_WORD_OFFSET(FW_LOADER_API_KNI_RETURN)]
     blx r2
     cmp r4,#0
     beq 4f
-    ldr r1,[r4,#4]
-    sub r1,r1,#3
-    cmp r1,#1
+    ldr r1,[r4,#FW_WORD_OFFSET(FW_RESULT_COMMAND_WORD)]
+    sub r1,r1,#FW_COMMAND_RUN
+    cmp r1,#(FW_COMMAND_ABORT - FW_COMMAND_RUN)
     bhi 4f
-    ldr r0,[r4,#336]  /* p[84]: native loader's own allocation */
+    ldr r0,[r4,#FW_WORD_OFFSET(FW_RESULT_RESIDENT_LOADER_WORD)]  /* Native loader's own allocation. */
     cmp r0,#0
     beq 4f
     mov r1,#0
-    str r1,[r4,#336]
-    ldr ip,[r5,#12]
+    str r1,[r4,#FW_WORD_OFFSET(FW_RESULT_RESIDENT_LOADER_WORD)]
+    ldr ip,[r5,#FW_WORD_OFFSET(FW_LOADER_API_FREE)]
     add sp,sp,#8
     pop {r4-r8,lr}
     bx ip             /* tail-free self: no instruction in freed RAM follows */
@@ -42,11 +42,11 @@ native_entry:
     pop {r4-r8,pc}
 .balign 4
 loader_api:
-    .word 0xA40F0000 + API_KNI_PARAM
-    .word 0xA40F0000 + API_KNI_RETURN
-    .word 0xA40F0000 + API_FW_OS_BLOCK_ALLOC_NO_WAIT
-    .word 0xA40F0000 + API_FW_OS_BLOCK_DEALLOC
-    .word 0xA40F0000 + API_CACHE_SYNC
+    .word FW_LOADER_PATCH_MAGIC + API_KNI_PARAM
+    .word FW_LOADER_PATCH_MAGIC + API_KNI_RETURN
+    .word FW_LOADER_PATCH_MAGIC + API_FW_OS_BLOCK_ALLOC_NO_WAIT
+    .word FW_LOADER_PATCH_MAGIC + API_FW_OS_BLOCK_DEALLOC
+    .word FW_LOADER_PATCH_MAGIC + API_CACHE_SYNC
 .size native_entry,.-native_entry
 .section .text.stack,"ax",%progbits
 .global on_native_stack

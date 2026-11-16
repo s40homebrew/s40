@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 """Build/relocate the retained bridge independently of the transient installer."""
 
-import importlib.util
 import os
 import shutil
 import struct
@@ -80,10 +79,8 @@ def main():
         "-z",
         "notext",
     )
-    spec = importlib.util.spec_from_file_location("s40pack", HOMEBREW / "tools/pack.py")
-    pack = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = pack
-    spec.loader.exec_module(pack)
+    sys.path.insert(0, str(HOMEBREW / "tools"))
+    import pack
     elf = elf_path.read_bytes()
     header = pack.ElfHeader(*struct.unpack_from("<16sHHIIIIIHHHHHH", elf))
     if header.kind != 3 or header.machine != 40 or header.ident[:7] != pack.ELF_IDENT:

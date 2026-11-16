@@ -9,9 +9,13 @@ final class Rm443Profile {
 
     static FirmwareProfile create() {
         FirmwareProfile.Layout layout = new FirmwareProfile.Layout();
+        layout.useKvmDiscovery();
+        layout.useRomRangeTable();
+        layout.useLibraryDescriptors();
 
         layout.displayWidth = 240;
         layout.displayHeight = 320;
+        layout.canvasLayout = FirmwareApi.CANVAS_CURRENT;
         layout.inputLayout = FirmwareApi.INPUT_KEYPAD;
         layout.timerMessageLast = 488;
         layout.ignoredTimer = 127;
@@ -21,27 +25,8 @@ final class Rm443Profile {
         layout.romLimit = 0xF2000000;
         layout.ramStart = 0xD8000000;
         layout.ramLimit = 0xDA000000;
-        layout.bootBytes = 65536;
-        layout.romPageMask = 4095;
-
-        // Range-walker instruction and zero-terminated bound pairs.
-        layout.rangeTableLdrOffset = 14;
-        layout.rangeEntryBytes = 8;
-        layout.rangeEndOffset = 4;
-        layout.rangeMinTableBytes = 24;
-        layout.rangeMaxEntries = 8;
-        layout.rangeRegionMask = 0xF0000000;
-        layout.rangeRomRegion = 0xF0000000;
-
-        // Nokia built-in library descriptor (unused words are not constrained).
-        layout.descriptorBytes = 36;
-        layout.descriptorHashOffset = 24;
-        layout.descriptorStringsOffset = 28;
-        layout.descriptorSymbolsOffset = 32;
 
         // KNI helper cluster and return/stack relationships.
-        layout.kniReturnSearchRadius = 4096;
-        layout.kniParamReturnOffset = 12;
         layout.kniReturnSpLdrOffset = 4;
 
         // Calls relative to checked task-loop and dispatcher recipes.
@@ -52,8 +37,6 @@ final class Rm443Profile {
         layout.taskInternalQueueCallOffset = 58;
         layout.taskMsgCountCallOffset = 62;
         layout.taskSubscriptionsCallOffset = 82;
-        layout.invokeBranchOffset = 24;
-        layout.dispatchNativeEntryOffset = 48;
 
         // LCD ownership and paired resource acquire/release operations.
         layout.lcdReserveOwnerLdrOffset = 12;

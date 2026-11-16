@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from native_contract import IMAGE_MAGIC, IMAGE_STACK_BYTES, IMAGE_VERSION, WORD_BYTES
+
 ELF_IDENT = b"\x7fELF\x01\x01\x01"  # ELF32, little-endian, current version
 ET_DYN = 3
 EM_ARM = 40
@@ -21,10 +23,10 @@ SHT_SYMTAB = 2
 SHT_REL = 9
 R_ARM_RELATIVE = 23
 SHN_UNDEF = 0
-S4D0_MAGIC = 0x30443453
-S4D0_VERSION = 2
-NATIVE_STACK_BYTES = 192 * 1024
-WORD_BYTES = 4
+# Public module aliases retained for callers that inspect packed images.
+S4D0_MAGIC = IMAGE_MAGIC
+S4D0_VERSION = IMAGE_VERSION
+NATIVE_STACK_BYTES = IMAGE_STACK_BYTES
 
 
 class ElfHeader(NamedTuple):

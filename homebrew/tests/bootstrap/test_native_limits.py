@@ -22,6 +22,7 @@ from unicorn.arm_const import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
 GENERATOR = ROOT / "tools/gen_native_limits.py"
 SPEC = importlib.util.spec_from_file_location("gen_native_limits", GENERATOR)
 GEN = importlib.util.module_from_spec(SPEC)
@@ -57,6 +58,7 @@ class NativeLimitsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             (work / "application.bin").write_bytes(payload())
+            subprocess.run([sys.executable, str(ROOT / "tools/gen_imports.py"), tmp], check=True)
             subprocess.run(
                 ["python3", str(GENERATOR), tmp, "--from-payload"], check=True, capture_output=True
             )
@@ -80,6 +82,7 @@ public class BoundsTest {
                     "-d",
                     tmp,
                     str(work / "NativeBuildConfig.java"),
+                    str(work / "FirmwareApi.java"),
                     str(ROOT / "src/java/launcher/NativeImageBounds.java"),
                     str(work / "BoundsTest.java"),
                 ],

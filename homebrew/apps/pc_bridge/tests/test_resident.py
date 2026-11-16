@@ -6,7 +6,6 @@ The real CM scheduler, allocator, transport and cache hardware are not emulated.
 Run bash homebrew/build.sh pc_bridge before this offline check.
 """
 
-import importlib.util
 import os
 import struct
 import sys
@@ -42,10 +41,8 @@ REGS = (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)
 
 
 def image():
-    spec = importlib.util.spec_from_file_location("s40pack", HOMEBREW / "tools/pack.py")
-    pack = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = pack
-    spec.loader.exec_module(pack)
+    sys.path.insert(0, str(HOMEBREW / "tools"))
+    import pack
     elf = (BUILD / "resident/resident.elf").read_bytes()
     header = pack.ElfHeader(*struct.unpack_from("<16sHHIIIIIHHHHHH", elf))
     sections = [

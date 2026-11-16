@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: MIT */
+#include "native_protocol.h"
 /*
  * RM-443 family stage zero, entered in ARM state from KVM's native BLX.
  *
@@ -24,9 +25,9 @@ stage_start:
 
 .align 2
 .Lpayload_address:
-    .word 0xDEAD0001
+    .word FW_STAGE_PATCH_ENTRY
 .Lpayload_length:
-    .word 0xDEAD0002
+    .word FW_STAGE_PATCH_LENGTH
 .Lcache_sync:
-    .word 0xDEAD0003
+    .word FW_STAGE_PATCH_CACHE
 .size stage_start, .-stage_start

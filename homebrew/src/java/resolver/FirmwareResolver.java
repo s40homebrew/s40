@@ -159,8 +159,7 @@ final class FirmwareResolver {
                                 && address - secondaryStart <= secondaryBytes - size));
     }
     boolean ram(int address) {
-        return (address & 3) == 0 && address - profile.ramStart >= 0
-                && address - profile.ramStart < profile.ramLimit - profile.ramStart;
+        return profile.ramRange(address, NativeProtocol.WORD_BYTES);
     }
     int word(int address) {
         if ((address & 3) != 0 || !rom(address, 4)) {

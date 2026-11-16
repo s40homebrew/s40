@@ -6,25 +6,38 @@ import argparse
 import struct
 from pathlib import Path
 
+from native_contract import (
+    BINDING_BYTES,
+    IMAGE_HEADER_BYTES,
+    IMAGE_MAGIC,
+    IMAGE_MAX_BINDINGS,
+    IMAGE_MAX_RELOCATIONS,
+    IMAGE_STACK_BYTES,
+    IMAGE_VERSION,
+    RELOCATION_BYTES,
+    WORD_BYTES,
+)
+
 
 def limits(payload, exact=False):
-    if len(payload) < 32:
+    if len(payload) < IMAGE_HEADER_BYTES:
         raise ValueError("truncated native header")
     magic, version, size, memory, entry, relocations, stack, bindings = struct.unpack_from(
         "<8I", payload
     )
-    allocation = memory + 4 * relocations + 8 * bindings + stack
+    allocation = memory + RELOCATION_BYTES * relocations + BINDING_BYTES * bindings + stack
     if (
-        magic != 0x30443453
-        or version != 2
+        magic != IMAGE_MAGIC
+        or version != IMAGE_VERSION
         or not 0 < size <= memory
-        or memory & 3
+        or memory & (WORD_BYTES - 1)
         or entry >= size
-        or relocations > 65536
-        or stack != 196608
-        or not 1 <= bindings <= 256
+        or relocations > IMAGE_MAX_RELOCATIONS
+        or stack != IMAGE_STACK_BYTES
+        or not 1 <= bindings <= IMAGE_MAX_BINDINGS
         or allocation > 0x7FFFFFFF
-        or len(payload) != 32 + size + 4 * relocations + 8 * bindings
+        or len(payload)
+        != IMAGE_HEADER_BYTES + size + RELOCATION_BYTES * relocations + BINDING_BYTES * bindings
     ):
         raise ValueError("invalid native image layout")
     memory_limit, allocation_limit = (memory, allocation) if exact else (3 * 1024**2, 4 * 1024**2)
