@@ -7,6 +7,9 @@
 #include <stdio.h>
 
 #include "s40/events.h"
+/* Retained here for source compatibility; display-only clients may include
+ * s40/display.h directly. */
+#include "s40/display.h"
 
 /* Implement this entry point in the application. Return zero to quit normally.
  * The runtime owns native_main, message dispatch, display release, tracked
@@ -28,12 +31,6 @@ uint32_t s40_launch_options(void);
  * Empty when the launcher supplies none. Do not modify or free this storage.
  */
 const char* s40_launch_argument(void);
-unsigned s40_display_width(void);
-unsigned s40_display_height(void);
-/* Packed native-sized 0xFFRRGGBB buffer, owned by the runtime. */
-uint32_t* s40_display_open(void);
-void s40_display_present(void);
-void s40_display_close(void);
 /* Relative file paths use this root; include its trailing slash. */
 void s40_set_root(const char* root);
 const char* s40_get_root(void);

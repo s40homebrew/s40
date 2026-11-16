@@ -10,6 +10,8 @@
 #include "libc/internal.h"
 #include "s40/audio.h"
 #include "s40/runtime.h"
+#include "s40/video.h"
+#include "display/video_internal.h"
 
 uint32_t* s40_result;
 static jmp_buf finish_env;
@@ -51,9 +53,12 @@ void s40_pump(void) {
         --pump_depth;
         return;
     }
+    s40_display_service_awake();
     for (unsigned budget = 0; budget < PUMP_MESSAGE_BUDGET && fw_msg_count(); budget++) {
         uintptr_t msg = fw_os_msg_receive();
         if (!msg)
+            continue;
+        if (s40_video_dispatch_message(msg))
             continue;
         if (fw_message_is_timer(msg, s40_result[FW_TIMER_MESSAGE_LAST_WORD])) {
             unsigned timer = fw_message_timer_id(msg);
@@ -69,8 +74,10 @@ void s40_pump(void) {
         }
         fw_CM_ComMgr_ProcessInternalQueue();
     }
-    fw_CM_ComMgr_ProcessInternalQueue();
-    fw_CM_ComMgr_ScanISISubscriptions();
+    if (s40_video_prepare_services()) {
+        fw_CM_ComMgr_ProcessInternalQueue();
+        fw_CM_ComMgr_ScanISISubscriptions();
+    }
     --pump_depth;
 }
 
@@ -109,6 +116,8 @@ __attribute__((visibility("default"))) void native_main(uint32_t* result) {
         s40_pump();
         s40_finish(s40_app_main());
     }
+    // Restore normal firmware rendering before application exit callbacks.
+    s40_video_suspend();
     // A failing exit callback may jump back here. Never run callbacks twice.
     if (!finishing) {
         finishing = 1;
@@ -119,6 +128,8 @@ __attribute__((visibility("default"))) void native_main(uint32_t* result) {
         }
     }
     s40_audio_close();
+    (void)s40_display_keep_awake(0);
+    s40_video_close();
     s40_display_close();
     printf("Exit %d, ms %u\n", exit_status, s40_uptime_ms());
     result[FW_RESULT_STATUS_WORD] = exit_status;
