@@ -22,7 +22,7 @@ The [Hello example](examples/hello/README.md) shows native graphics and input.
 [RAM Booster](apps/ram_booster/README.md), [Heap Check](apps/heap_check/README.md),
 [Battery Info](apps/battery/README.md) and [PC Bridge](apps/pc_bridge/README.md)
 are separate utilities. Battery Info and PC Bridge require RM-443 10.12.
-[Native Time](../native_time/README.md) is a smaller standalone native-call example.
+[Native Time](examples/native_time/README.md) is a smaller standalone native-call example.
 Doom, TyrQuake and Linux live in separate repositories and build against this SDK.
 
 ## Source

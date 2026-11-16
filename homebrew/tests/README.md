@@ -42,7 +42,7 @@ Application-specific checks run after building that application:
 
 ```sh
 bash homebrew/apps/ram_booster/tests/check.sh
-python3 native_time/tests/check.py
+python3 homebrew/examples/native_time/tests/check.py
 python3 homebrew/apps/pc_bridge/tests/test_resident.py
 python3 homebrew/apps/pc_bridge/tests/test_install.py
 ```

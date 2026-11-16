@@ -122,7 +122,8 @@ public final class NativeTime extends MIDlet implements CommandListener, Runnabl
                     "OS entry: " + hex(rom.time), "Cache: " + hex(rom.cache),
                     "Query took " + elapsed + " ms", "Read again to see it change."}
                 : new String[] {"Native call failed: " + error,
-                    failure == null ? "See README.txt for check codes." : failure.toString()};
+                    needsRestart ? "Restart the phone before retrying."
+                    : failure == null ? "Native call check failed." : failure.toString()};
         running = false;
         if (!needsRestart) screen.addCommand(query);
         screen.addCommand(exit);

@@ -11,6 +11,9 @@ esac
 if [[ -z ${S40_APP_DIR:-} && -f "$PROJECT_DIR/apps/$EXAMPLE/build.sh" ]]; then
     exec bash "$PROJECT_DIR/apps/$EXAMPLE/build.sh"
 fi
+if [[ -z ${S40_APP_DIR:-} && -f "$PROJECT_DIR/examples/$EXAMPLE/build.sh" ]]; then
+    exec bash "$PROJECT_DIR/examples/$EXAMPLE/build.sh"
+fi
 EXAMPLE_DIR=${S40_APP_DIR:-$PROJECT_DIR/examples/$EXAMPLE}
 BUILD_DIR=${S40_BUILD_DIR:-$PROJECT_DIR/build/$EXAMPLE}
 DIST_DIR=${S40_DIST_DIR:-$PROJECT_DIR/dist/$EXAMPLE}

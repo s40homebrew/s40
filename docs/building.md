@@ -89,11 +89,11 @@ bash homebrew/build.sh ram_booster
 bash homebrew/build.sh heap_check
 bash homebrew/build.sh battery
 bash homebrew/build.sh pc_bridge
-bash native_time/build.sh
+bash homebrew/build.sh native_time
 ```
 
 Install the matching JAR/JAD pairs from `homebrew/dist/<app>/` or
-`native_time/dist/`.
+`homebrew/dist/native_time/`.
 
 See the [Doom](https://github.com/s40homebrew/doom),
 [TyrQuake](https://github.com/s40homebrew/tyrquake) and
@@ -111,7 +111,7 @@ After building the corresponding applications:
 
 ```sh
 bash homebrew/apps/ram_booster/tests/check.sh
-python3 native_time/tests/check.py
+python3 homebrew/examples/native_time/tests/check.py
 python3 homebrew/apps/pc_bridge/tests/test_resident.py
 python3 homebrew/apps/pc_bridge/tests/test_install.py
 ```

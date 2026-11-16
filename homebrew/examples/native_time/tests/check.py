@@ -9,12 +9,14 @@ import sys
 from pathlib import Path
 from zipfile import ZipFile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "homebrew/tests"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tests"))
 from s40_test_paths import SDK_CLASSES, java_tool
 
 project = Path(__file__).resolve().parents[1]
-build = project / "build"
-jar = project / "dist/NativeTime.jar"
+sdk = project.parents[1]
+build = Path(os.environ.get("S40_BUILD_DIR", sdk / "build/native_time"))
+dist = Path(os.environ.get("S40_DIST_DIR", sdk / "dist/native_time"))
+jar = dist / "NativeTime.jar"
 with ZipFile(jar) as archive:
     assert archive.testzip() is None
     for name in archive.namelist():
@@ -23,7 +25,7 @@ with ZipFile(jar) as archive:
             assert data == (build / "preverified" / name).read_bytes()
             assert struct.unpack_from(">IHH", data) == (0xCAFEBABE, 3, 45)
             assert b"StackMap" in data
-jad = (project / "dist/NativeTime.jad").read_text()
+jad = (dist / "NativeTime.jad").read_text()
 assert f"MIDlet-Jar-Size: {jar.stat().st_size}\n" in jad
 assert "MIDlet-Jar-URL: NativeTime.jar\n" in jad
 
