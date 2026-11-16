@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Emit C constants from the Java/native wire contract."""
+"""Emit C constants from the Java/native wire contract; no firmware inputs."""
 
 import re
 import sys

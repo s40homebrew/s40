@@ -1,47 +1,83 @@
-# RAM Booster
+# S40 RAM Booster
 
-A Java ME proof of concept that raises the foreground Java heap quota for
-subsequently launched apps. It changes the launch policy in RAM; the shared
-Java pool stays the same. Restore or reboot to undo it.
+A Java ME app that changes the foreground Java memory quota for newly opened
+apps. Changes stay in RAM and disappear on reboot. Ordinary quota mode leaves
+the shared Java arena unchanged; selected models also have arena expansion.
 
-| Phone | Offered quotas |
-| --- | --- |
-| Nokia 301, Asha 302 | 3, 4, 6, 8 MiB |
-| C2-01, C3-00, 6700 classic | 3, 4 MiB |
-| 6303 classic | 3 MiB |
+| Phone | Quotas after Check | Arena behavior |
+| --- | --- | --- |
+| Nokia 301 | 3, 4, 6, 8 MiB | Existing shared arena |
+| Asha 302 (RM-813) | 3, 4, 6, 8 MiB | Existing 8 MiB arena; stock quota is 4 MiB |
+| C2-01, C3-00, 6700 classic | 3, 4 MiB | Existing shared arena |
+| Nokia 6300 (RM-217) | 3, 4 MiB | Replaces the 2.5 MiB arena with 5 MiB |
+| 6303 classic (RM-443) | 3 MiB ordinary; 4–8 MiB with expansion | Replaces the 3.75 MiB arena with 9 MiB |
+| Asha 306 (RM-767) | 3 MiB ordinary; 4, 5, 6 MiB with expansion | Extends the object reservation from 4 to 8 MiB |
 
-Choices are filtered by the discovered pool. Existing apps keep their current
-quota; other running apps still share that pool.
+Check discovers the pool and available expansion mechanism before offering
+sizes. A quota is a ceiling, not a reservation of free RAM: VM overhead and
+other Java apps use the same arena. The 6300i, 6300 4G and 6700 slide are
+different platforms and are not supported by these profiles.
 
-## Build and use
+## Build and install
 
-Follow [build setup](../../../docs/building.md), then run from the repo root:
+Follow [build setup](../../../docs/building.md), then run from the SDK repo root:
 
 ```sh
 bash homebrew/build.sh ram_booster
 bash homebrew/build.sh heap_check
 ```
 
-Install both matching JAR/JAD pairs from `homebrew/dist/ram_booster/` and
-`homebrew/dist/heap_check/`.
+Install the matching JAR/JAD pairs from `homebrew/dist/ram_booster/` and
+`homebrew/dist/heap_check/`. The optional command
+`python3 homebrew/apps/ram_booster/tools/package_kit.py` packages both apps.
 
-1. Run Heap Check to see the stock quota, then exit it.
-2. Open RAM Booster, choose **Check**, then **Apply**. Start with 3 MiB;
-   on Asha 302 use 6 MiB because its stock foreground quota is already 4 MiB.
-3. Exit the booster and reopen Heap Check. Use **Retain 2 MiB** (or **Retain
-   5 MiB** for the 302), then **Collect**, and check that the data survives.
-4. Exit the checker, reopen the booster and **Restore**. Relaunch the checker
-   to confirm the stock quota. A reboot also clears the change.
+## Use
 
-For other quotas, retain one MiB less than the selected quota. Temporary Java
-VM changes are restored after every operation. If cleanup fails or the phone
-hangs, reboot before trying again.
+1. Open [Heap Check](../heap_check/README.md), note the stock memory result,
+   then exit it completely. On a stock 6300, use the 1 or 1.5 MiB retention test.
+2. Open RAM Booster and choose **Check phone**, then the recommended size:
+   **6 MiB on Asha 302**, **4 MiB on 6303/306 with expansion**, or **3 MiB**
+   on the other models.
+3. Follow the result screen. On 6300/6303, expansion restarts Java and closes
+   its apps; reopen the booster and Check again. On 306, use **Close booster**
+   and reopen it for the automatic status check. If saving the request failed,
+   the app asks for a manual Check instead.
+4. Once the requested limit is active, exit the booster and reopen Heap Check.
+   Retain one MiB below the selected quota and verify the data through collection.
+   Try larger quotas only after the smaller result succeeds.
+5. Use **Restore default**, then relaunch the checker to confirm the original
+   quota. Reboot the phone to release any expanded arena and resident hooks.
 
-## Source
+Already-running apps keep their old quota. Check does not apply a quota.
+**Details** shows discovery, timing and native status; the latest report is
+saved in the `RamBoosterResult` RMS store. A changed memory-view address can
+receive one automatic Check retry after cleanup; Apply is never retried
+automatically. If the result requests a phone restart, reboot before continuing.
 
-`src/` contains discovery, device mappings, UI and the session template.
-`native/` contains ARM926 and ARMv6 writers. `tools/` generates protocol
-constants and the executable switch carrier. [Porting](docs/porting.md)
-describes the contracts that need checking for another device.
+## Expansion and Restore
+
+**6300 and 6303:** the first expansion allocates a new contiguous OS-owned arena
+and restarts the Java VM after restoring temporary bootstrap state. Existing
+objects are not copied into the new arena. Check reports activation only when
+the VM is using the new base and size: 5120 KiB on 6300 or 9216 KiB on 6303.
+Later quota changes reuse that arena. Restore resets the launch quota but keeps
+the arena until reboot; a live heap is never shrunk.
+
+**Asha 306:** expansion preserves object addresses and commits physical RAM
+as the VM needs it. The separate method arena and single-object limit remain
+unchanged. An occupied adjacent reservation can leave the request pending.
+If reopening reports **Not active**, read Details; repeating the exit sequence
+does not make an occupied neighbour free. Restore cancels pending activation
+or resets an active quota, but the resident hook and expanded reservation remain
+until reboot. Do not reboot between Apply and the first status check, since
+that cancels the request. Reboot before installing a different booster version
+over an existing resident hook.
+
+Ordinary quota patches are undone by Restore or reboot. No mode writes flash.
+Native games use separate OS allocations and do not need the Java heap boost;
+reboot after expansion to return its native RAM before running those games.
+
+For loading or bootstrap failures, use the [staged probe](diagnostic/README.md).
+Implementation details are in the [porting guide](docs/porting.md).
 
 MIT licensed; see [COPYING](../../COPYING).

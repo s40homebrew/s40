@@ -8,7 +8,8 @@ final class HeapPatchResolver {
     // recipe within the local initializer; the string alone never selects a site.
     private static final String FAILURE = "Failed to load main class";
     private static final String SYSTEM = "libsystem.so", ALLOC = "os_block_alloc_no_wait",
-                                FREE = "os_block_dealloc";
+                                FREE = "os_block_dealloc", MESSAGE_NEW = "CM_ISIMes_New_Zero",
+                                MESSAGE_SEND = "CM_ComMgr_SendToObject";
     // 15 Thumb-1 halfwords, not ARM words. STACK reloads the app from an SP slot;
     // FRAME reloads it from [r3+0x40]. Variant 2 differs at cfg+0x20 -> app+0x6c.
     // Keep observed address assertions in tests, and variant semantics here.
@@ -41,10 +42,51 @@ final class HeapPatchResolver {
             0x6c19, 0x6688, 0x6c18, 0x4900, 0x6606, 0x6c18, 0x1d09, 0x6646};
     private static final int[] PATCH_ZERO = {0x68e0, 0x6588, 0x2805, 0x6960, 0xd101, 0x2000, 0x0500,
             0x65c8, 0x69a0, 0x6688, 0x0008, 0x4900, 0x6606, 0x1d09, 0x6646};
+    // Legacy zero-tail initializer. R7 was cleared just before this block;
+    // preserve both zero stores and the following frame/literal loads. The
+    // next LSLS overwrites our comparison flags before any conditional use.
+    private static final int[] FRAME_LEGACY = {0x68e0, 0x6c19, 0x6588, 0x6960, 0x6c19, 0x65c8,
+            0x69a0, 0x6c19, 0x6688, 0x6c18, 0x6607, 0x6c18, 0x6647, 0x6b98, 0x4900};
+    private static final int[] PATCH_LEGACY = {0x68e0, 0x6588, 0x2805, 0x6960, 0xd101, 0x2000,
+            0x0500, 0x65c8, 0x69a0, 0x6688, 0x660f, 0x664f, 0x46c0, 0x6b98, 0x4900};
+    // Full-touch frame: cfg in R7, app in frame+44, tail fields at +74/+78.
+    private static final int[] FRAME_TOUCH = {0x6c59, 0x68f8, 0x6588, 0x6c59, 0x6978, 0x65c8,
+            0x6c59, 0x69b8, 0x6688, 0x6c59, 0x2002, 0x6748, 0x6c59, 0x6a78, 0x6788};
+    private static final int[] PATCH_TOUCH = {0x68f8, 0x6588, 0x2805, 0xd102, 0x2000, 0x0500,
+            0xe000, 0x6978, 0x65c8, 0x69b8, 0x6688, 0x2002, 0x6748, 0x6a78, 0x6788};
     final HeapBoosterProfile profile;
     final int[] original = new int[15];
     final int[] replacement = new int[15];
     int site, variant, currentMiB, poolBytes, poolBase, cacheSync;
+    int poolProvider, poolClear, poolBaseLiteral, poolSizeInstruction;
+    int fixedHeapState, fixedHeapConfig, fixedConfigSite, fixedResetHelper, fixedResetFlag;
+    int fixedHeapBaseOffset, fixedHeapSizeOffset, fixedGrowthBytes, fixedQuotaLimit;
+    private int fixedProvider, fixedInitializers, fixedConfigs, fixedResets, fixedConfigAddress;
+    private int messageNew, messageSend;
+    private int recipeAlloc, recipeFree, recipeReader, recipeAllocs, recipeFrees, recipeReaders;
+    private int legacyScheduler, legacySchedulers, fixedInitializer;
+    private static final int[] LEGACY_SCHEDULER = {0xb510, 0, 0, 0x2800, 0xd027, 0, 0, 0x2800,
+            0xd124, 0, 0, 0x2800, 0xd105, 0x2001, 0, 0, 0, 0, 0xe011};
+    private static final int[] LEGACY_RESET = {0xb510, 0, 0, 0x2800, 0xd00b, 0, 0, 0, 0, 0x1c43,
+            0xd101, 0, 0, 0, 0, 0, 0, 0x2000, 0, 0, 0, 0, 0x2200, 0x2118, 0x2000, 0, 0, 0, 0,
+            0xbd10};
+    private static final int[] LEGACY_REINIT = {0xb510, 0, 0, 0x2800, 0xd10d, 0x2100, 0x207d,
+            0x0380, 0, 0, 0x2005, 0, 0, 0, 0, 0x1c43, 0xd102, 0, 0, 0xbd10, 0x2800, 0xd1fc, 0, 0, 0,
+            0, 0x2001, 0, 0, 0xbd10};
+    private static final int[] LEGACY_VM_HEAD = {
+            0xb5f0, 0x4e00, 0xb0ff, 0x2500, 0x1c30, 0xb0c6, 0x3050, 0x6035, 0x7005};
+    private static final int[] LEGACY_VM_LINK = {0x6830, 0x2701, 0x4338, 0x6030, 0, 0, 0x95c4,
+            0x4900, 0x4a00, 0x6808, 0x90c3, 0xa8c0, 0x6008, 0xa860, 0x90c0, 0x6810, 0x90c2, 0xa860,
+            1, 1, 0x1c07, 0xd110, 0x4e00, 0x4668, 0x6030, 1, 1, 0x2800, 0xd106, 0, 0, 0, 0, 0x4900,
+            0x6008};
+    private static final int[] LEGACY_HEAP_WRAPPER = {
+            0x4800, 0xb510, 0x2400, 0x6004, 0x4800, 0x6004, 0, 0, 0, 0, 0, 0};
+    private static final int[] LEGACY_HEAP_INIT = {0xb570, 0x4d00, 0x2400, 0x606c, 1, 1, 0x4900,
+            0x2000, 0x1c23, 0x00c2, 0x508b, 0x1852, 0x3001, 0x2874, 0x6053, 0xdbf8, 0x4a00, 0x2001,
+            0x604a, 0x6028, 0xbd70};
+    private static final int[] FIXED_RESET = {0xb570, 0x0005, 0x000e, 0x200c, 0, 0, 0x21db, 0x7041,
+            0x0e29, 0x7101, 0x0c29, 0x7141, 0x0a29, 0x7181, 0x2100, 0x71c5, 0x7201, 0x7241, 0x0a31,
+            0x7281, 0x0004, 0x72c6, 0, 0, 0x0001, 0x0023, 0x22e1, 0x207a, 0, 0, 0xbd70};
     int sites, pools, caches, error;
     int alloc, free, allocators;
     int romEnd, ramEnd;
@@ -53,8 +95,11 @@ final class HeapPatchResolver {
 
     HeapPatchResolver(HeapBoosterProfile p) {
         profile = p;
+        Rm217Memory.prepare();
         // Ensure classes/constants are initialized outside the forged interval.
-        if (FAILURE.length() == 0 || STACK.length != PATCH.length)
+        if (FAILURE.length() == 0 || SYSTEM.length() == 0 || ALLOC.length() == 0
+                || FREE.length() == 0 || MESSAGE_NEW.length() == 0 || MESSAGE_SEND.length() == 0
+                || STACK.length != PATCH.length)
             throw new Error();
     }
     int word(int address) {
@@ -67,10 +112,34 @@ final class HeapPatchResolver {
     private boolean discoverBounds() {
         if (profile.mapPrefixBytes == 0)
             return true;
+        int count = 0;
+        // Older RAP has no ELF descriptors. Its checked range walker points
+        // into the readable boot prefix; the same recipe/table validator is
+        // used by the Doom runtime.
+        for (int p = profile.romStart;
+                p - profile.romStart <= profile.mapPrefixBytes - Rm217Memory.RANGE.size; p += 2) {
+            if (half(p) != 0xb570 || half(p + 2) != 0x1c04
+                    || !Rm217Memory.RANGE.matches(view, base, p, profile.romStart,
+                            profile.romStart + profile.mapPrefixBytes))
+                continue;
+            int at = p + 14;
+            int tableAt = ((at + 4) & ~3) + ((half(at) & 255) << 2);
+            if (tableAt - profile.romStart < 0
+                    || tableAt - profile.romStart > profile.mapPrefixBytes - 4)
+                return false;
+            int end = RomRanges.readEnd(view, base, profile.romStart, profile.mapPrefixBytes,
+                    profile.romEnd - profile.romStart, word(tableAt), 4095, 8, 4, 24, 8, 0xf0000000,
+                    0xf0000000);
+            if (end == 0)
+                return false;
+            romEnd = end;
+            count++;
+        }
+        if (count != 0)
+            return count == 1;
         // RAPU combined RAM + two-code-bank table, found only in the known
         // readable kernel prefix. The second bank is corroboration, not a
         // request to read it. A shorter build narrows every later code read.
-        int count = 0;
         for (int p = profile.romStart; p - profile.romStart <= profile.mapPrefixBytes - 40;
                 p += 4) {
             if (word(p) != profile.ramStart || word(p + 8) != 0 || word(p + 12) != 0
@@ -122,7 +191,7 @@ final class HeapPatchResolver {
         int count = word(hash + 4);
         if (count < 2 || count > 8192 || !rom(symbols, count * 16))
             return;
-        int a = 0, f = 0;
+        int a = 0, f = 0, newMessage = 0, sendMessage = 0;
         for (int i = 1; i < count; i++) {
             int s = symbols + 16 * i, off = word(s), value = word(s + 4);
             if (off < 0 || off > romEnd - profile.romStart || !rom(value & ~1, 4)
@@ -138,11 +207,40 @@ final class HeapPatchResolver {
                     return;
                 f = value;
             }
+            if (textAt(strings + off, MESSAGE_NEW)) {
+                if (newMessage != 0)
+                    return;
+                newMessage = value;
+            }
+            if (textAt(strings + off, MESSAGE_SEND)) {
+                if (sendMessage != 0)
+                    return;
+                sendMessage = value;
+            }
         }
         if (a != 0 && f != 0) {
             allocators++;
             alloc = a;
             free = f;
+            messageNew = newMessage;
+            messageSend = sendMessage;
+        }
+    }
+    private void memoryRecipe(int p, int first, int second) {
+        if (first == 0xb5f0 && second == 0x1c06
+                && Rm217Memory.ALLOC.matches(view, base, p, profile.romStart, romEnd)) {
+            recipeAllocs++;
+            recipeAlloc = p | 1;
+        }
+        if (first == 0xb5f0 && second == 0x1c05
+                && Rm217Memory.FREE.matches(view, base, p, profile.romStart, romEnd)) {
+            recipeFrees++;
+            recipeFree = p | 1;
+        }
+        if (first == 0xb089 && second == 0x6819
+                && Rm217Memory.FILE_READ.matches(view, base, p - 4, profile.romStart, romEnd)) {
+            recipeReaders++;
+            recipeReader = p - 4;
         }
     }
     private boolean failureString(int p) {
@@ -179,6 +277,10 @@ final class HeapPatchResolver {
             form = 5;
         if (form < 0)
             return;
+        if (form == 1 && half(p + 26) == 0x6b98) {
+            candidateLegacy(p);
+            return;
+        }
         if (form == 1
                 && ((half(p + 18) == 0x6c18 && half(p + 22) == 0x6606)
                         || (half(p + 20) == 0x0008 && half(p + 24) == 0x6606))) {
@@ -233,8 +335,57 @@ final class HeapPatchResolver {
             original[i] = h;
         }
     }
+    private void candidateTouch(int p) {
+        if (!rom(p - 6, 40) || half(p - 6) != 0x6c59 || half(p - 4) != 0x68b8
+                || half(p - 2) != 0x6188)
+            return;
+        boolean stock = true, patched = true;
+        int quota = 0;
+        for (int i = 0; i < 15; i++) {
+            int h = half(p + 2 * i);
+            if (h != FRAME_TOUCH[i])
+                stock = false;
+            if (i == 4) {
+                quota = h & 255;
+                if ((h & 0xff00) != 0x2000 || !choice(quota))
+                    patched = false;
+            } else if (h != PATCH_TOUCH[i])
+                patched = false;
+        }
+        if ((!stock && !patched) || !failureString(p))
+            return;
+        sites++;
+        site = p;
+        variant = 6;
+        currentMiB = stock ? 0 : quota;
+        for (int i = 0; i < 15; i++)
+            original[i] = FRAME_TOUCH[i];
+    }
     static boolean choice(int mib) {
-        return mib == 3 || mib == 4 || mib == 6 || mib == 8;
+        return mib >= 3 && mib <= 8;
+    }
+    private void candidateLegacy(int p) {
+        if (!rom(p - 16, 50) || half(p - 16) != 0x2700 || half(p - 14) != 0x6387
+                || half(p + 30) != 0x0080 || half(p + 32) != 0x3104
+                || (half(p + 28) & 0xff00) != 0x4900 || !profile.ram(literal(p + 28), 4))
+            return;
+        boolean stock = true, patched = true;
+        for (int i = 0; i < 14; i++) {
+            int h = half(p + 2 * i);
+            if (h != FRAME_LEGACY[i])
+                stock = false;
+            if (i == 5 ? (h & 0xff00) != 0x2000 || !choice(h & 255) : h != PATCH_LEGACY[i])
+                patched = false;
+        }
+        if ((!stock && !patched) || !failureString(p))
+            return;
+        sites++;
+        site = p;
+        variant = 7;
+        currentMiB = stock ? 0 : half(p + 10) & 255;
+        for (int i = 0; i < 15; i++)
+            original[i] = FRAME_LEGACY[i];
+        original[14] = half(p + 28);
     }
     private int moveLiteral(int h, int from, int to) {
         int target = ((from + 4) & ~3) + ((h & 255) << 2), delta = target - ((to + 4) & ~3);
@@ -265,6 +416,19 @@ final class HeapPatchResolver {
         original[10] = h;
     }
     void makePatch(int mib) {
+        if (variant == 7) {
+            for (int i = 0; i < 15; i++)
+                replacement[i] = PATCH_LEGACY[i];
+            replacement[5] |= mib;
+            replacement[14] = original[14];
+            return;
+        }
+        if (variant == 6) {
+            for (int i = 0; i < 15; i++)
+                replacement[i] = PATCH_TOUCH[i];
+            replacement[4] |= mib;
+            return;
+        }
         if (variant == 5) {
             for (int i = 0; i < 15; i++)
                 replacement[i] = PATCH_APP_CONSTANT[i];
@@ -288,23 +452,28 @@ final class HeapPatchResolver {
     // pool suppliers. Register allocation/order and BL versus BLX may differ;
     // an unrelated instruction stops recognition rather than being skipped.
     private void pool(int p) {
-        if (!rom(p, 48) || half(p) != 0xB510 || (half(p + 2) != 0x000C && half(p + 2) != 0x460C))
+        if (!rom(p, 48) || half(p) != 0xB510
+                || (half(p + 2) != 0x000C && half(p + 2) != 0x460C && half(p + 2) != 0x1c0c))
             return;
         int r0 = 0, r1 = 0, known = 0, at = p + 4;
+        int baseLiteral = 0, sizeInstruction = 0;
         for (int i = 0; i < 6; i++, at += 2) {
             int h = half(at), reg = (h >>> 8) & 7;
             if ((h & 0xF800) == 0x4800 && reg <= 1) {
                 int value = literal(at);
-                if (reg == 0)
+                if (reg == 0) {
                     r0 = value;
-                else
+                    baseLiteral = ((at + 4) & ~3) + ((h & 255) << 2);
+                } else
                     r1 = value;
                 known |= 1 << reg;
             } else if ((h & 0xF800) == 0x2000 && reg <= 1) {
                 if (reg == 0)
                     r0 = h & 255;
-                else
+                else {
                     r1 = h & 255;
+                    sizeInstruction = at;
+                }
                 known |= 1 << reg;
             } else if ((h & 0xF800) == 0 && (h & 7) <= 1 && ((h >>> 3) & 7) == (h & 7)) {
                 reg = h & 7;
@@ -339,9 +508,247 @@ final class HeapPatchResolver {
                 pools++;
                 poolBytes = r1;
                 poolBase = r0;
+                poolProvider = p;
+                poolClear = called | (mode == 0xF800 ? 1 : 0);
+                poolBaseLiteral = baseLiteral;
+                poolSizeInstruction = sizeInstruction;
                 return;
             } else
                 return;
+        }
+    }
+    private int armLiteral(int p, int reg) {
+        int w = word(p);
+        if ((w & 0xff7ff000) != (0xe51f0000 | reg << 12))
+            return 0;
+        int at = p + 8 + ((w & 0x800000) != 0 ? w & 4095 : -(w & 4095));
+        return rom(at, 4) ? word(at) : 0;
+    }
+    private void fixedHeapInitializer(int p) {
+        // The ARM fixed-arena KVM initializer passes its size slot and output
+        // base slot to the Thumb supplier. Bind the live state through that
+        // call, rather than trusting a future supplier's advertised capacity.
+        if (!rom(p, 40) || word(p) != 0xe92d4070 || word(p + 12) != 0xe5900000
+                || word(p + 16) != 0xe2841010 || word(p + 20) != 0xe5840014
+                || word(p + 24) != 0xe2840014 || word(p + 32) != 0xe5840018
+                || word(p + 36) != 0xe5940010)
+            return;
+        int config = armLiteral(p + 4, 0), state = armLiteral(p + 8, 4);
+        int call = word(p + 28);
+        if (((config | state) & 3) != 0 || !profile.ram(config, 4) || !profile.ram(state, 64)
+                || (call & 0xfe000000) != 0xfa000000)
+            return;
+        int supplier = p + 36 + ((call << 8) >> 6) + ((call >>> 23) & 2);
+        if (!rom(supplier, 20) || half(supplier) != 0xb510
+                || (half(supplier + 2) != 0x000c && half(supplier + 2) != 0x460c))
+            return;
+        fixedInitializers++;
+        fixedInitializer = p;
+        fixedProvider = supplier;
+        fixedHeapState = state;
+        fixedHeapConfig = config;
+        fixedHeapBaseOffset = 24;
+        fixedHeapSizeOffset = 20;
+    }
+    private void legacyFixedHeapInitializer(int p) {
+        if (!rom(p, 80) || word(p + 4) != 0xe92d4010 || word(p + 12) != 0xe5900000
+                || word(p + 16) != 0xe1a01004 || word(p + 20) != 0xe5840004
+                || word(p + 24) != 0xe2840004 || word(p + 32) != 0xe5840008
+                || word(p + 36) != 0xe5940000 || word(p + 40) != 0xe3500000
+                || word(p + 64) != 0xe584000c || word(p + 68) != 0xe5941004
+                || word(p + 72) != 0xe0801001 || word(p + 76) != 0xe5841010)
+            return;
+        int config = armLiteral(p, 0), state = armLiteral(p + 8, 4);
+        int supplier = armCall(p + 28, true);
+        if (((config | state) & 3) != 0 || !profile.ram(config, 4) || !profile.ram(state, 64)
+                || !rom(supplier, 20) || half(supplier) != 0xb510 || half(supplier + 2) != 0x1c0c)
+            return;
+        fixedInitializers++;
+        fixedInitializer = p;
+        fixedProvider = supplier;
+        fixedHeapState = state;
+        fixedHeapConfig = config;
+        fixedHeapBaseOffset = 8;
+        fixedHeapSizeOffset = 4;
+    }
+    private void fixedConfig(int p) {
+        if (!rom(p, 16) || (half(p) & 0xff00) != 0x4900 || half(p + 2) != 0x2000
+                || !((half(p + 6) == 0x0492 && (half(p + 4) == 0x220f || half(p + 4) == 0x2224))
+                        || (half(p + 6) == 0x04d2
+                                && (half(p + 4) == 0x2205 || half(p + 4) == 0x220a)))
+                || half(p + 8) != 0x7008 || half(p + 10) != 0x3914 || half(p + 12) != 0x600a)
+            return;
+        int address = literal(p) - 20;
+        if ((address & 3) != 0 || !profile.ram(address, 24))
+            return;
+        fixedConfigs++;
+        fixedConfigSite = p + 4;
+        fixedConfigAddress = address;
+    }
+    private void fixedReset(int p) {
+        if (!rom(p, FIXED_RESET.length * 2))
+            return;
+        for (int i = 0; i < FIXED_RESET.length; i++) {
+            if (i == 4 || i == 22 || i == 28) {
+                if (thumbTarget(p + i * 2) == 0)
+                    return;
+                i++;
+            } else if (half(p + i * 2) != FIXED_RESET[i])
+                return;
+        }
+        fixedResets++;
+        fixedResetHelper = p | 1;
+    }
+    private boolean callPattern(int p, int[] code) {
+        if (!rom(p, code.length * 2))
+            return false;
+        for (int i = 0; i < code.length; i++) {
+            if (code[i] == 0 || code[i] == 1) {
+                if ((code[i] == 0 ? thumbTarget(p + i * 2) : thumbArmCall(p + i * 2)) == 0)
+                    return false;
+                i++;
+            } else if ((code[i] & 0xf8ff) == 0x4800) {
+                if ((half(p + i * 2) & 0xff00) != code[i])
+                    return false;
+            } else if (half(p + i * 2) != code[i])
+                return false;
+        }
+        return true;
+    }
+    private void legacyScheduler(int p) {
+        if (!callPattern(p, LEGACY_SCHEDULER))
+            return;
+        legacySchedulers++;
+        legacyScheduler = p;
+    }
+    private int byteGetter(int p, int opcode, int field) {
+        if (!rom(p, 6) || (half(p) & 0xff00) != 0x4800 || half(p + 2) != opcode
+                || half(p + 4) != 0x4770)
+            return 0;
+        int state = literal(p);
+        return profile.ram(state, 16) ? state + field : 0;
+    }
+    private void legacyResetBinding() {
+        if (legacySchedulers != 1 || fixedHeapBaseOffset != 8 || fixedInitializers != 1)
+            return;
+        int initialized = thumbTarget(legacyScheduler + 2);
+        int getter = thumbTarget(legacyScheduler + 18);
+        int reset = thumbTarget(legacyScheduler + 32);
+        int initializedFlag = byteGetter(initialized, 0x7a00, 8);
+        int resetFlag = byteGetter(getter, 0x7a40, 9);
+        if (initializedFlag == 0 || resetFlag != initializedFlag + 1
+                || !callPattern(reset, LEGACY_RESET) || thumbTarget(reset + 2) != initialized)
+            return;
+        int reinit = thumbTarget(reset + 54);
+        if (!callPattern(reinit, LEGACY_REINIT) || thumbTarget(reinit + 2) != initialized)
+            return;
+        int vm = thumbTarget(reinit + 26);
+        if (!callPattern(vm, LEGACY_VM_HEAD) || !callPattern(vm + 110, LEGACY_VM_LINK)
+                || thumbTarget(vm + 118) != fixedConfigSite - 4
+                || thumbArmCall(vm + 146) != thumbArmCall(vm + 160))
+            return;
+        int wrapper = thumbTarget(vm + 168);
+        if (!callPattern(wrapper, LEGACY_HEAP_WRAPPER))
+            return;
+        int initialize = thumbTarget(wrapper + 20);
+        if (!callPattern(initialize, LEGACY_HEAP_INIT)
+                || thumbArmCall(initialize + 8) != fixedInitializer)
+            return;
+        fixedResetHelper = getter | 1;
+        fixedResetFlag = resetFlag;
+    }
+    private int thumbTarget(int p) {
+        int hi = half(p), lo = half(p + 2);
+        if ((hi & 0xf800) != 0xf000 || (lo & 0xf800) != 0xf800)
+            return 0;
+        int delta = ((hi & 2047) << 12) | ((lo & 2047) << 1);
+        if ((delta & 0x400000) != 0)
+            delta -= 0x800000;
+        int target = p + 4 + delta;
+        return rom(target, 4) ? target : 0;
+    }
+    private int armCall(int p, boolean thumb) {
+        int w = word(p);
+        if (thumb ? (w & 0xfe000000) != 0xfa000000 : (w & 0xff000000) != 0xeb000000)
+            return 0;
+        int at = p + 8 + ((w << 8) >> 6) + (thumb ? (w >>> 23) & 2 : 0);
+        return rom(at, 4) ? at : 0;
+    }
+    private int thumbArmCall(int p) {
+        int hi = half(p), lo = half(p + 2);
+        if ((hi & 0xf800) != 0xf000 || (lo & 0xf801) != 0xe800)
+            return 0;
+        int delta = ((hi & 2047) << 12) | ((lo & 2047) << 1);
+        if ((delta & 0x400000) != 0)
+            delta -= 0x800000;
+        int at = (p + 4 + delta) & ~3;
+        return rom(at, 4) ? at : 0;
+    }
+    private int armImmediate(int w) {
+        int value = w & 255, shift = ((w >>> 8) & 15) * 2;
+        return (value >>> shift) | (value << ((32 - shift) & 31));
+    }
+    private void growingPool(int p) {
+        // KVM initialization -> pool wrapper -> VMM reservation. Unlike a
+        // fixed arena, the committed extent grows. The reservation ceiling
+        // minus its 16-byte header is the capacity, not the initial 16 KiB.
+        if (!rom(p, 96) || word(p + 4) != 0xe92d4010 || armLiteral(p, 0) == 0
+                || !profile.ram(armLiteral(p + 8, 4), 24) || word(p + 12) != 0xe5900000
+                || word(p + 16) != 0xe2841000 || word(p + 20) != 0xe5840004
+                || word(p + 24) != 0xe2840004 || word(p + 32) != 0xe5840008
+                || word(p + 36) != 0xe5940000 || word(p + 40) != 0xe3500000
+                || word(p + 44) != 0x1a000004 || word(p + 68) != 0xe5940008
+                || word(p + 72) != 0xe584000c || word(p + 76) != 0xe5941004
+                || word(p + 80) != 0xe0800001 || word(p + 84) != 0xe5840014
+                || word(p + 88) != 0xe5840010)
+            return;
+        int wrapper = armCall(p + 28, true);
+        if (!rom(wrapper, 28) || half(wrapper) != 0xb570 || half(wrapper + 2) != 0x4605
+                || half(wrapper + 4) != 0x4602 || half(wrapper + 6) != 0x2001
+                || half(wrapper + 8) != 0x0380 || (half(wrapper + 14) & 0xff00) != 0x4c00
+                || half(wrapper + 16) != 0x6020 || half(wrapper + 18) != 0x6829
+                || half(wrapper + 24) != 0x6820 || half(wrapper + 26) != 0xbd70)
+            return;
+        int supplier = thumbArmCall(wrapper + 10);
+        if (!rom(supplier, 264) || word(supplier) != 0xe92d47f0 || word(supplier + 4) != 0xe1a05001
+                || word(supplier + 8) != 0xe1a08002 || word(supplier + 12) != 0xe1a0a000
+                || word(supplier + 16) != 0xe5914000 || word(supplier + 40) != 0xe3a02000
+                || (word(supplier + 44) & 0xfffff000) != 0xe3a01000
+                || word(supplier + 48) != 0xe1a00002 || armCall(supplier + 52, false) == 0
+                || word(supplier + 64) != 0xe5854000 || word(supplier + 72) != 0xe28aa010
+                || (word(supplier + 204) & 0xfffff000) != 0xe3a00000
+                || word(supplier + 244) != 0x124a0010 || word(supplier + 252) != 0x12847010
+                || word(supplier + 256) != 0x15880000)
+            return;
+        int capacity = armImmediate(word(supplier + 44));
+        if (capacity != armImmediate(word(supplier + 204)) || capacity < 2 * 1048576
+                || capacity > 32 * 1048576 || (capacity & 4095) != 0)
+            return;
+        pools++;
+        poolBytes = capacity - 16;
+        poolBase = 0; // Dynamically reserved virtual range, not a static base.
+    }
+    private void bareAllocators(int p) {
+        // Some X-GOLD builds keep ELF absolute symbols/strings in ROM while
+        // constructing library descriptors in RAM. Recognize the adjacent
+        // named exports; never embed their values or their symbol-table size.
+        if (!rom(p, 32) || word(p + 8) != 0 || word(p + 12) != 0xfff10012 || word(p + 24) != 0
+                || word(p + 28) != 0xfff10012 || word(p) <= 0 || word(p) > 65535
+                || word(p + 16) != word(p) + ALLOC.length() + 1 || !rom(word(p + 4) & ~1, 4)
+                || !rom(word(p + 20) & ~1, 4))
+            return;
+        int limit = p + 65536;
+        if (limit > romEnd)
+            limit = romEnd;
+        for (int a = p + 32; a < limit - ALLOC.length() - FREE.length() - 2; a++) {
+            if (!textAt(a, ALLOC) || !textAt(a + ALLOC.length() + 1, FREE))
+                continue;
+            int strings = a - word(p);
+            if (!rom(strings, 1) || ((word(strings & ~3) >>> ((strings & 3) * 8)) & 255) != 0)
+                continue;
+            allocators++;
+            alloc = word(p + 4);
+            free = word(p + 20);
         }
     }
     private static final int[] DIRECT_CACHE = {0xE92D4070, 0xE0805001, 0xE3C0001F, 0xEE070F3E,
@@ -352,6 +759,22 @@ final class HeapPatchResolver {
     private static final int[] RAPU_ARM_ICACHE = {0xE92D4001, 0xE3A0E000, 0xE1A02000, 0xE0813000,
             0xE2433001, 0xEC423F05, 0xEE07EF95, 0xEC423F05, 0xEE07EF95, 0xEE072FF5, 0xEE07EF9A,
             0xEE07EF95};
+    // Leaf ARM11 range synchronizer: clean D range, invalidate I range twice,
+    // synchronize branch targets/prefetch, preserving incoming interrupt state.
+    private static final int[] XGOLD_CACHE = {0xe0811000, 0xe2411001, 0xe1a02000, 0xe3a0c01f,
+            0xe1c1100c, 0xe1c0000c, 0xe3a0c007, 0xe1c2200c, 0xe3a0c000, 0xee07cf9a, 0xe10f3000,
+            0xf10c00c0, 0xec401f0c, 0xee07cf9a, 0xe12ff003, 0xee07cfba, 0xe10f3000, 0xf10c00c0,
+            0xec401f05, 0xee07cf95, 0xec401f05, 0xee07cf95, 0xee072ff5, 0xee07cf9a, 0xee07cf95,
+            0xe12ff003, 0xe12fff1e};
+    private void cacheLeaf(int p) {
+        if (!rom(p, XGOLD_CACHE.length * 4))
+            return;
+        for (int i = 0; i < XGOLD_CACHE.length; i++)
+            if (word(p + i * 4) != XGOLD_CACHE[i])
+                return;
+        caches++;
+        cacheSync = p;
+    }
     private boolean rapuInstructionCache(int function) {
         int p = function & ~1;
         if ((function & 1) != 0)
@@ -420,6 +843,13 @@ final class HeapPatchResolver {
         sites = pools = caches = error = 0;
         alloc = free = allocators = 0;
         site = variant = poolBytes = poolBase = cacheSync = currentMiB = 0;
+        poolProvider = poolClear = poolBaseLiteral = poolSizeInstruction = 0;
+        fixedHeapState = fixedHeapConfig = fixedProvider = fixedInitializers = 0;
+        fixedConfigSite = fixedResetHelper = fixedConfigs = fixedResets = fixedConfigAddress = 0;
+        fixedHeapBaseOffset = fixedHeapSizeOffset = fixedGrowthBytes = fixedQuotaLimit = 0;
+        fixedResetFlag = legacyScheduler = legacySchedulers = fixedInitializer = 0;
+        messageNew = messageSend = 0;
+        recipeAlloc = recipeFree = recipeReader = recipeAllocs = recipeFrees = recipeReaders = 0;
         romEnd = profile.romEnd;
         ramEnd = profile.ramEnd;
     }
@@ -433,26 +863,122 @@ final class HeapPatchResolver {
         }
         // Discovery does not depend on model capability flags or CPU backend.
         // Every mapped profile receives every applicable content recipe.
-        for (int p = profile.romStart; p - profile.romStart < romEnd - profile.romStart - 64;
-                p += 4) {
-            int w = word(p);
-            if ((w & 65535) == 0x68E0) {
-                candidate(p);
-                candidate(p - 2);
+        // Keep the hot word pass in local variables. Masked index advancement
+        // preserves word(address)'s unsigned subtraction at the view boundary.
+        // Candidate helpers still validate their complete recipes.
+        int start = profile.romStart, scanBytes = romEnd - start - 64;
+        int pointerLimit = romEnd - start - 13, cacheSeed = XGOLD_CACHE[0];
+        for (int offset = 0, index = (start - viewBase) >>> 2; offset < scanBytes;
+                offset += 4, index = (index + 1) & 0x3fffffff) {
+            int p = start + offset, w = memory[index], low = w & 65535, high = w >>> 16;
+            // Group Thumb seeds by opcode byte. The adjacent instruction is
+            // already in this word for aligned functions; reject unrelated
+            // PUSH/LDR instructions before entering the full validators.
+            switch (low >>> 8) {
+                case 0x68:
+                    if (low == 0x68e0) {
+                        candidate(p);
+                        candidate(p - 2);
+                    } else if (low == 0x68f8) {
+                        candidateTouch(p);
+                        candidateTouch(p - 2);
+                    }
+                    break;
+                case 0xb5:
+                    if (low == 0xb510) {
+                        if (high == 0x000c || high == 0x460c || high == 0x1c0c)
+                            pool(p);
+                        else if ((high & 0xf800) == 0xf000)
+                            legacyScheduler(p);
+                    } else if (low == 0xb570 && high == 0x0005)
+                        fixedReset(p);
+                    break;
+                case 0x49:
+                    if (high == 0x2000)
+                        fixedConfig(p);
+                    break;
             }
-            if ((w >>> 16) == 0x68E0) {
-                candidate(p + 2);
-                candidate(p);
+            // Thumb entry points may also start in the upper halfword. Read
+            // the next word only for seeds that need that adjacent instruction.
+            switch (high >>> 8) {
+                case 0x68:
+                    if (high == 0x68e0) {
+                        candidate(p + 2);
+                        candidate(p);
+                    } else if (high == 0x68f8) {
+                        candidateTouch(p + 2);
+                        candidateTouch(p);
+                    }
+                    break;
+                case 0xb5:
+                    if (high == 0xb510) {
+                        int next = memory[(index + 1) & 0x3fffffff] & 65535;
+                        if (next == 0x000c || next == 0x460c || next == 0x1c0c)
+                            pool(p + 2);
+                        else if ((next & 0xf800) == 0xf000)
+                            legacyScheduler(p + 2);
+                    } else if (high == 0xb570
+                            && (memory[(index + 1) & 0x3fffffff] & 65535) == 0x0005)
+                        fixedReset(p + 2);
+                    break;
+                case 0x49:
+                    if ((memory[(index + 1) & 0x3fffffff] & 65535) == 0x2000)
+                        fixedConfig(p + 2);
+                    break;
             }
-            if ((w & 65535) == 0xB510)
-                pool(p);
-            if ((w >>> 16) == 0xB510)
-                pool(p + 2);
-            if (w == 0xE92D4070)
+            if (w == 0xE92D4070) {
                 cache(p);
-            if (rom(w, 13) && ((word(w & ~3) >>> ((w & 3) * 8)) & 255) == 108)
+                fixedHeapInitializer(p);
+            }
+            if (w == cacheSeed)
+                cacheLeaf(p);
+            if (low == 0xb5f0 || low == 0xb089)
+                memoryRecipe(p, low, high);
+            if (high == 0xb5f0 || high == 0xb089)
+                memoryRecipe(p + 2, high, memory[(index + 1) & 0x3fffffff] & 65535);
+            if ((w & 0xff7ff000) == 0xe51f0000 && memory[(index + 1) & 0x3fffffff] == 0xe92d4010) {
+                growingPool(p);
+                legacyFixedHeapInitializer(p);
+            }
+            if (w == 0xfff10012)
+                bareAllocators(p - 12);
+            int pointerOffset = w - start;
+            if (pointerOffset >= 0 && pointerOffset <= pointerLimit
+                    && ((memory[((w & ~3) - viewBase) >>> 2] >>> ((w & 3) * 8)) & 255) == 108)
                 allocator(p);
         }
+        if (recipeAllocs == 1 && recipeFrees == 1 && recipeReaders == 1
+                && thumbTarget(recipeReader + 168) == (recipeAlloc & ~1)
+                && thumbTarget(recipeReader + 248) == (recipeFree & ~1)) {
+            allocators++;
+            alloc = recipeAlloc;
+            free = recipeFree;
+        }
+        if (fixedInitializers != 1 || fixedProvider != poolProvider)
+            fixedHeapState = fixedHeapConfig = 0;
+        if (fixedConfigs != 1 || fixedConfigAddress != fixedHeapConfig)
+            fixedConfigSite = 0;
+        if (fixedHeapState != 0 && fixedConfigSite != 0 && poolBaseLiteral == poolProvider + 24
+                && poolSizeInstruction == poolProvider + 4) {
+            int shift = half(poolProvider + 8), configShift = half(fixedConfigSite + 2);
+            if (fixedHeapBaseOffset == 8 && shift == 0x04c9 && configShift == 0x04d2
+                    && (poolBytes == 0x280000 || poolBytes == 0x500000)) {
+                fixedGrowthBytes = 0x500000;
+                fixedQuotaLimit = 4;
+            } else if (fixedHeapBaseOffset == 24 && shift == 0x0489 && configShift == 0x0492
+                    && (poolBytes == 0x3c0000 || poolBytes == 0x900000)) {
+                fixedGrowthBytes = 0x900000;
+                fixedQuotaLimit = 8;
+            }
+        }
+        int reset = fixedResetHelper & ~1;
+        int getter = reset == 0 ? 0 : thumbTarget(reset + 44);
+        if (fixedResets != 1 || thumbTarget(reset + 8) != (messageNew & ~1)
+                || thumbTarget(reset + 56) != (messageSend & ~1) || !rom(getter, 4)
+                || (half(getter) & 0xff00) != 0x4800 || half(getter + 2) != 0x4770
+                || !profile.ram(literal(getter), 4))
+            fixedResetHelper = 0;
+        legacyResetBinding();
         if (sites != 1)
             error = 101;
         else if (pools != 1)

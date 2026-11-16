@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: MIT
 """Shared four-literal carrier, derived from the tested RM-839 OS probe.
 
+Generates bytecode geometry only; no firmware input or address table.
 The 114-byte lookupswitch body carries Thumb-1 opcodes in sorted signed Java
 keys. Literal offsets 40/48/56/64 and entry +13 are coupled to the session.
 Changing compilers, opcode encodings or CPU/VM ABI requires validating the
 packaged class bytes, not just this generator's output. See the porting guide.
-Also emits an 8208-byte method with an 8192-byte table reserved for temporary
+Also emits an 12304-byte method with an 12288-byte table reserved for temporary
 native instructions. The Java object heap is not executable on every platform.
 """
 
@@ -57,12 +58,12 @@ def main():
         "\n".join(f"            if(index=={i})return 0x{w:08X};" for i, w in enumerate(words)),
         text,
     )
-    # One shared return target keeps the table exactly 8192 bytes, with a
-    # 12-byte switch header and four return bytes: 8208 bytes total. Sparse
+    # One shared return target keeps the table exactly 12288 bytes, with a
+    # 12-byte switch header and four return bytes: 12304 bytes total. Sparse
     # keys force lookupswitch; these bytes become temporary native storage.
     text = text.replace(
         "            // @PAYLOAD_SPACE_CASES@",
-        "\n".join(f"            case {i << 16}:" for i in range(1, 1025))
+        "\n".join(f"            case {i << 16}:" for i in range(1, 1537))
         + "\n                return 0;",
     )
     assert "@CARRIER" not in text and "@EXPECTED" not in text and "@PAYLOAD" not in text

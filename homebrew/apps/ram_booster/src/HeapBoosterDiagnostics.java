@@ -36,8 +36,10 @@ final class HeapBoosterDiagnostics {
             return "Java object spacing differs from the expected memory layout.";
         if (error == 9)
             return "Java object references are outside the profile's RAM map.";
-        if (error == 11 || error == 12)
-            return "Class or method-table layout was not recognized.";
+        if (error == 11)
+            return "Anchored class pointer was outside the expected RAM map or misaligned. See Details.";
+        if (error == 12)
+            return "Class method table was outside the expected RAM map or had an invalid count. See Details.";
         if (error == 13 || error == 14)
             return "More than one native entry or carrier matched.";
         if (error == 16 || error == 17 || error == 23)
@@ -54,6 +56,11 @@ final class HeapBoosterDiagnostics {
             return "Bytecode carrier not found. Open Details for method diagnostics.";
         if (error == 21 || error == 22)
             return "Payload code buffer not identified. No native call made.";
+        if (error == 24)
+            return "The Java memory view moved during discovery. No native call made. Run Check again.";
+        if (error == 25)
+            return "The pending arena change has not activated. Reboot before launching "
+                    + "another Java app, then run Check and Apply again.";
         if (error == 91)
             return "Temporary VM state could not be fully restored. Reboot before continuing.";
         if (error == 101)
@@ -88,6 +95,21 @@ final class HeapBoosterDiagnostics {
             return "Could not allocate a suitable RAM copy. No patch applied.";
         if (error == 212)
             return "The OS allocator or deallocator was not found. The mapping was left unchanged.";
+        if (error == 213)
+            return "Restore the pending expansion before selecting 3 MiB.";
+        if (error == 215)
+            return "Arena activation is busy. Exit and reopen the booster before checking again.";
+        if (error == 216)
+            return "Native entry has IRQ disabled. Exit and reopen the booster before checking again.";
+        if (error == 217)
+            return "Fixed-arena growth metadata or firmware recipe did not match. No expansion applied.";
+        if (error == 218)
+            return "The active Java arena changed. Exit and reopen the booster before checking again.";
+        if (error == 219)
+            return "A contiguous native arena allocation was unavailable. No expansion applied.";
+        if (error == 220)
+            return "The Java restart entry failed. The arena change remains pending. "
+                    + "Reboot before launching another Java app.";
         return "Bootstrap stopped. Record this code and the diagnostic values.";
     }
 }

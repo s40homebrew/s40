@@ -17,7 +17,7 @@ static void put_code(u32 address, volatile u32* words) {
 }
 static int quota_fits(volatile u32* r) {
     u32 mib = r[W_MIB];
-    return (mib == 3 || mib == 4 || mib == 6 || mib == 8) && r[W_POOL_BYTES] >= (mib << 20);
+    return mib >= 3 && mib <= 8 && r[W_POOL_BYTES] >= (mib << 20);
 }
 static inline int firmware_function(volatile u32* r, u32 function) {
     u32 address = function & ~1u;

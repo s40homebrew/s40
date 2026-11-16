@@ -1,6 +1,6 @@
 Manifest-Version: 1.0
 MIDlet-Name: S40 Heap Check
-MIDlet-Version: 0.1.1
+MIDlet-Version: 0.2.2
 MIDlet-Vendor: S40 Homebrew
 MIDlet-1: S40 Heap Check,,S40HeapCheck
 MicroEdition-Configuration: CLDC-1.1

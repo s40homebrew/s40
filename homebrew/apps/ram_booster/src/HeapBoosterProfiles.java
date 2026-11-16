@@ -18,9 +18,20 @@ final class HeapBoosterProfiles {
             // RM-813 product-info field 5 supplies Nokia302 or Nokia3020.
             return new HeapBoosterProfile("RM-813", 0xF0100400, 0xF0D20000, 0xD8000000, 0xDCC75000,
                     HeapBoosterProfile.ARMV6_RAPU, 0, 0, 0x40000);
+        if (model(text, "nokia306") || model(text, "nokia3060") || model(text, "nokiaasha306"))
+            // X-GOLD keeps OS allocations in identity DDR, but reserves Java
+            // objects in two VMM arenas. Do not admit the unmapped gap.
+            return new HeapBoosterProfile("RM-767", 0x40120000, 0x41D24000, 0x60000000, 0x62000000,
+                    HeapBoosterProfile.ARMV6_XGOLD, 0x60000000, 0x62000000, 0, 0x90000000,
+                    0xC0000000);
         if (model(text, "nokiac2-01"))
             return new HeapBoosterProfile("RM-721 / RM-722", 0xF0100400, 0xF0B30000, 0xD8000000,
                     0xDC000000, HeapBoosterProfile.ARM926_RAP, 0x10000000, 0x14000000);
+        if (model(text, "nokia6300"))
+            // Original RAP 6300 only. The firmware's range walker narrows the
+            // ROM ceiling before scanning; no firmware suffix selects code.
+            return new HeapBoosterProfile("RM-217", 0xF0100400, 0xF2000000, 0xD8000000, 0xD9000000,
+                    HeapBoosterProfile.ARM926_RAP, 0, 0, 65536);
         if (model(text, "nokia6303c") || model(text, "nokia6303classic"))
             return new HeapBoosterProfile("RM-443", 0xF0100400, 0xF14C0000, 0xD8000000, 0xDA000000,
                     HeapBoosterProfile.ARM926_RAP, 0x10000000, 0x12000000);
@@ -35,23 +46,6 @@ final class HeapBoosterProfiles {
         return null;
     }
     private static boolean model(String text, String name) {
-        if (!text.startsWith(name))
-            return false;
-        int end = name.length();
-        // Some platform strings append a numeric hardware variant before the
-        // firmware separator: the photographed RM-470 reports Nokia6700c-1.
-        // Keep model-name boundaries, but do not mistake this for a new model
-        // or tie selection to the firmware suffix following '/'.
-        if (end < text.length() && text.charAt(end) == '-') {
-            int firstDigit = ++end;
-            while (end < text.length() && text.charAt(end) >= '0' && text.charAt(end) <= '9')
-                end++;
-            if (end == firstDigit)
-                return false;
-        }
-        if (text.length() == end)
-            return true;
-        char c = text.charAt(end);
-        return c == '/' || c == ' ';
+        return PlatformIdentity.matches(text, name);
     }
 }

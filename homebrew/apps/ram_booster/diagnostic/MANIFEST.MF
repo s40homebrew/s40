@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+MIDlet-Name: S40 Booster Probe
+MIDlet-Version: 0.2.0
+MIDlet-Vendor: S40 Diagnostics
+MIDlet-1: S40 Booster Probe,,BoosterProbe
+MicroEdition-Configuration: CLDC-1.1
+MicroEdition-Profile: MIDP-2.0

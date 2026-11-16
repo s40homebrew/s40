@@ -9,12 +9,18 @@ final class HeapBoosterProfile implements HeapBoosterProtocol {
     final int romStart, romEnd, ramStart, ramEnd;
     final int backend, physicalStart, physicalEnd;
     final int mapPrefixBytes;
+    final int objectStart, objectEnd;
     HeapBoosterProfile(String name, int first, int end, int ramFirst, int ramLast, int writer,
             int physicalFirst, int physicalLast) {
         this(name, first, end, ramFirst, ramLast, writer, physicalFirst, physicalLast, 0);
     }
     HeapBoosterProfile(String name, int first, int end, int ramFirst, int ramLast, int writer,
             int physicalFirst, int physicalLast, int prefixBytes) {
+        this(name, first, end, ramFirst, ramLast, writer, physicalFirst, physicalLast,
+                prefixBytes, 0, 0);
+    }
+    HeapBoosterProfile(String name, int first, int end, int ramFirst, int ramLast, int writer,
+            int physicalFirst, int physicalLast, int prefixBytes, int objectsFirst, int objectsLast) {
         id = name;
         romStart = first;
         romEnd = end;
@@ -24,19 +30,24 @@ final class HeapBoosterProfile implements HeapBoosterProtocol {
         physicalStart = physicalFirst;
         physicalEnd = physicalLast;
         mapPrefixBytes = prefixBytes;
+        objectStart = objectsFirst;
+        objectEnd = objectsLast;
     }
     boolean rom(int address, int bytes) {
         return bytes >= 0 && address - romStart >= 0
                 && address - romStart <= romEnd - romStart - bytes;
     }
     boolean armv6() {
-        return backend == ARMV6_IDENTITY || backend == ARMV6_RAPU;
+        return backend == ARMV6_IDENTITY || backend == ARMV6_RAPU || backend == ARMV6_XGOLD;
     }
     String payloadResource() {
-        return armv6() ? "/ram_booster.bin" : "/ram_booster_arm926.bin";
+        return backend == ARMV6_XGOLD ? "/ram_booster_xgold.bin"
+                : armv6() ? "/ram_booster.bin" : "/ram_booster_arm926.bin";
     }
     boolean ram(int address, int bytes) {
-        return bytes >= 0 && address - ramStart >= 0
-                && address - ramStart <= ramEnd - ramStart - bytes;
+        return bytes >= 0 && ((address - ramStart >= 0
+                && address - ramStart <= ramEnd - ramStart - bytes)
+                || (objectEnd != objectStart && address - objectStart >= 0
+                        && address - objectStart <= objectEnd - objectStart - bytes));
     }
 }
