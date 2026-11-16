@@ -1,9 +1,16 @@
 /* SPDX-License-Identifier: MIT */
+#include "internal.h"
 #include "s40/audio.h"
 static const s40_audio_driver* backend;
+static int (*message_dispatch)(uintptr_t);
 void s40_audio_bind(const s40_audio_driver* driver) {
     s40_audio_close();
+    message_dispatch = 0;
     backend = driver;
+}
+void s40_audio_set_message_dispatch(int (*dispatch)(uintptr_t)) { message_dispatch = dispatch; }
+int s40_audio_dispatch_message(uintptr_t message) {
+    return message_dispatch ? message_dispatch(message) : 0;
 }
 int s40_audio_open(const s40_audio_format* format) {
     if (!backend || !format || (format->rate != 11025 && format->rate != 22050) ||
