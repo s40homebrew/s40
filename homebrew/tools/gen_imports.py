@@ -29,6 +29,51 @@ CONFIG_WORDS = {
 # Runtime policy IDs shared by the profile and native input adapter.
 INPUT_LAYOUTS = {"INPUT_KEYPAD": 0, "INPUT_QWERTY": 1}
 CANVAS_LAYOUTS = {"CANVAS_CURRENT": 0, "CANVAS_LEGACY": 1}
+# Optional services share the same resolved table as bootstrap/core imports.
+# Entries are data slots, not unconditional veneers: a missing capability must
+# never leave a callable zero veneer in an otherwise valid native application.
+# Group limits are exclusive. ABI values describe executable contracts, not
+# firmware versions or whether a handset has been tested.
+OPTIONAL_SERVICES = {
+    "AUDIO": """
+        ABI PARENT_CLASS REGISTER_OBJECT READY UNREGISTER_OBJECT SEND
+        DELETE_MESSAGE SOURCE_CREATE SOURCE_SHARE SOURCE_LIMITS SOURCE_ID
+        SOURCE_FORGET SOURCE_EOF FRAGMENT_INIT SOURCE_WRITE CLASS_CALL VOLUME_SCALE
+    """.split(),
+    "VIDEO": """
+        ABI LCD_WRITE_BYTES LCD_COMMAND LCD_READ_BYTE LCD_ABORT LCD_ARM
+        LCD_READ_WORD LCD_GATE LCD_WINDOW LCD_TIMEOUT LCD_DMA_COMPLETE
+        LCD_SET_COMPLETION LCD_PUBLIC_COMPLETE GPIO_PIN_MODE IRQ_UNLOCK IRQ_LOCK
+        TIMER_START TIMER_STOP WATCHDOG_START DMA_START CLOCK_ENABLE CLOCK_RESET
+        ISI_DELETE KEYBOARD_DECODE SCRATCHPAD_TAKE SCRATCHPAD_GIVE CM_SEND_SERVER
+        LCD_STATE LCD_PENDING DISPLAY_HOOKS FOREGROUND_SLOT JAVA_SERVER
+        JAVA_TASK_SLOT JAVA_TASK_DESCRIPTOR JAVA_QUEUE SCRATCHPAD_RESOURCES
+        OS_RESOURCES PERIODIC_TIMER_STATE LCD_CONTROL GPIO JAVA_TASK_ID
+        RESOURCE_COUNT PERIODIC_TIMER_ID RAM_START RAM_END
+    """.split(),
+    "BATTERY": """
+        ABI CAPACITY NOMINAL BARS VOLTAGE CHARGER ESTIMATE CHARGE ACCOUNTED
+        PAUSED COMPLETE USED_ENERGY EMPTY_ENERGY MODEL_INVALID
+    """.split(),
+    "BRIDGE": """
+        ABI PANEL_POINTER ORIGINAL_CLASS ORIGINAL_RX CLASS_SIZES TASK_CONTEXTS
+        DEVICE OBJECT_TASK MESSAGE_NEW MESSAGE_DELETE CALL_CLASS3
+        RAM_START RAM_END ROM_START ROM_END
+    """.split(),
+}
+CAPABILITY_ABIS = {
+    "AUDIO_ABI_NONE": 0,
+    "AUDIO_ABI_LEGACY": 1,
+    "AUDIO_ABI_CLASSIC": 2,
+    "AUDIO_ABI_DEVICE_IHF": 3,
+    "AUDIO_ABI_DEVICE_MEDIA": 4,
+    "VIDEO_ABI_NONE": 0,
+    "VIDEO_ABI_RM443": 1,
+    "BATTERY_ABI_NONE": 0,
+    "BATTERY_ABI_RM443": 1,
+    "BRIDGE_ABI_NONE": 0,
+    "BRIDGE_ABI_RM443": 1,
+}
 # These four discovered helpers have ordinary native call veneers. Other
 # dynamic entries use custom comparison veneers or are loader/data pointers.
 DIRECT_INTERNAL_VENEERS = ("fw_msg_count", "fw_vm_timer", "fw_app_id", "fw_event_pop")
@@ -68,6 +113,12 @@ def main():
             "kni_return",
         ]
     ]
+    required_count = len(entries)
+    groups = {}
+    for group, fields in OPTIONAL_SERVICES.items():
+        groups[group + "_FIRST"] = len(entries)
+        entries.extend((group.lower() + "_" + field.lower(), "") for field in fields)
+        groups[group + "_LIMIT"] = len(entries)
     ids = {n: i for i, (n, _) in enumerate(entries)}
     asm = ["/* SPDX-License-Identifier: MIT */", ".syntax unified", ".arm", ".text"]
     bindings = []
@@ -107,6 +158,7 @@ def main():
         "// Generated; firmware names and ABI indices, never addresses.",
         "final class FirmwareApi {",
         f"    static final int COUNT = {len(entries)};",
+        f"    static final int REQUIRED_COUNT = {required_count};",
         f"    static final int EXPORT_COUNT = {export_count};",
         f"    static final int DESCRIPTOR = {API_DESCRIPTOR_WORD};",
         f"    static final int PATCH_MAGIC = 0x{LOADER_PATCH_MAGIC:08X};",
@@ -118,12 +170,13 @@ def main():
         "#define ADAPTIVE_FIRMWARE_API_H",
         '#include "native_protocol.h"',
         f"#define FW_API_COUNT {len(entries)}",
+        f"#define FW_API_REQUIRED_COUNT {required_count}",
         f"#define FW_API_DESCRIPTOR {API_DESCRIPTOR_WORD}",
     ]
     for name, word in CONFIG_WORDS.items():
         java.append(f"    static final int {name}_WORD = {word};")
         header.append(f"#define FW_{name}_WORD {word}")
-    for name, value in {**INPUT_LAYOUTS, **CANVAS_LAYOUTS}.items():
+    for name, value in {**INPUT_LAYOUTS, **CANVAS_LAYOUTS, **CAPABILITY_ABIS, **groups}.items():
         java.append(f"    static final int {name} = {value};")
         header.append(f"#define FW_{name} {value}")
     for n, i in ids.items():

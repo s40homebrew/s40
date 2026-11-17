@@ -38,8 +38,14 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
         case 0: {
             if (n)
                 return 1;
-            const uint32_t info[8] = {PB_VERSION,   0xff,       control.base, control.bytes,
-                                      PB_RAM_START, PB_RAM_END, PB_CHUNK,     control.boot_cookie};
+            const uint32_t info[8] = {PB_VERSION,
+                                      0xff,
+                                      control.base,
+                                      control.bytes,
+                                      control.services.ram_start,
+                                      control.services.ram_end,
+                                      PB_CHUNK,
+                                      control.boot_cookie};
             for (unsigned i = 0; i < 8; i++)
                 put32(out + i * 4, info[i]);
             *count = 32;
@@ -48,7 +54,7 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
         case 1:
             if (n != 8 || b > PB_CHUNK)
                 return 1;
-            if (!pb_readable(a, b))
+            if (!pb_readable(&control.services, a, b))
                 return 3;
             memcpy(out, (const void*)(uintptr_t)a, b);
             *count = b;
@@ -56,14 +62,14 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
         case 2:
             if (n < 8 || b > PB_CHUNK || n != 8 + b)
                 return 1;
-            if (!pb_ram(a, b))
+            if (!pb_ram(&control.services, a, b))
                 return 3;
             memcpy((void*)(uintptr_t)a, body + 8, b);
             return 0;
         case 3: {
             if (n != 20)
                 return 1;
-            if ((!pb_readable(a & ~1u, 4)) || (!(a & 1u) && (a & 3u)))
+            if ((!pb_readable(&control.services, a & ~1u, 4)) || (!(a & 1u) && (a & 3u)))
                 return 3;
             uint32_t args[4], results[4];
             for (unsigned i = 0; i < 4; i++)
@@ -80,7 +86,7 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
             for (unsigned i = 0; i < PB_SLOTS; i++) {
                 if (control.allocations[i].address)
                     continue;
-                void* p = pb_alloc(a);
+                void* p = pb_alloc(&control.services, a);
                 if (!p)
                     return 4;
                 memset(p, 0, a);
@@ -97,7 +103,7 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
             for (unsigned i = 0; i < PB_SLOTS; i++) {
                 if (!a || control.allocations[i].address != a)
                     continue;
-                pb_free((void*)(uintptr_t)a);
+                pb_free(&control.services, (void*)(uintptr_t)a);
                 control.allocations[i].address = 0;
                 control.allocations[i].size = 0;
                 return 0;
@@ -106,7 +112,7 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
         case 6:
             if (n != 8 || !b)
                 return 1;
-            if (!pb_ram(a, b))
+            if (!pb_ram(&control.services, a, b))
                 return 3;
             control.sync((void*)(uintptr_t)a, b);
             return 0;
@@ -129,7 +135,8 @@ static unsigned dispatch(unsigned op, const unsigned char* body, unsigned n, uns
                     return 6;
             volatile uint32_t* panel = (volatile uint32_t*)(uintptr_t)control.panel;
             volatile uint32_t* record = (volatile uint32_t*)(uintptr_t)control.record;
-            if (!pb_ram(control.panel, 284) || !pb_ram(control.record, 16) || (control.panel & 3) ||
+            if (!pb_ram(&control.services, control.panel, PB_PANEL_BYTES) ||
+                !pb_ram(&control.services, control.record, 16) || (control.panel & 3) ||
                 (control.record & 3) || *panel != (uint32_t)(uintptr_t)&control.panel_class ||
                 record[0] != control.panel || record[2] != control.hook)
                 return 6;
@@ -155,9 +162,9 @@ static int panel_receive(void* object, unsigned selector, void* source, unsigned
                                                                    message, id);
     unsigned op = message[7];
     unsigned n = ((unsigned)message[8] << 8) | message[9];
-    unsigned char* reply = pb_message(18 + PB_CHUNK);
+    unsigned char* reply = pb_message(&control.services, 18 + PB_CHUNK);
     if (!reply) {
-        pb_delete(message);
+        pb_delete(&control.services, message);
         return 0;
     }
     reply[0] = message[0];
@@ -179,24 +186,26 @@ static int panel_receive(void* object, unsigned selector, void* source, unsigned
      * to the sender. This is the same prefix used by CM_ISIMes_New. */
     *(uint16_t*)(reply - 4) = 20 + count;
     control.calls++;
-    PB_FN(unsigned (*)(void*, unsigned, void*, unsigned, void*), PB_CALL_CLASS3)(source, 0xc011,
-                                                                                 object, 14, reply);
-    pb_delete(message);
+    PB_FN(unsigned (*)(void*, unsigned, void*, unsigned, void*), control.services.call_class3)(
+            source, 0xc011, object, 14, reply);
+    pb_delete(&control.services, message);
     return 0;
 }
 
-__attribute__((visibility("default"))) struct pb_control* resident_entry(void) {
+__attribute__((visibility("default"))) struct pb_control* resident_entry(
+        const struct pb_services* services) {
+    control.services = *services;
     control.magic = PB_MAGIC;
-    control.version = PB_VERSION;
-    control.original_class = PB_ORIGINAL_CLASS;
-    control.original_receiver = PB_ORIGINAL_RX;
+    control.version = PB_CONTROL_VERSION;
+    control.original_class = control.services.original_class;
+    control.original_receiver = control.services.original_receiver;
     control.hook = (uint32_t)(uintptr_t)panel_receive;
     control.methods[0] = 0xc009;
     control.methods[1] = control.hook;
     control.panel_class.self = (uint32_t)(uintptr_t)&control.panel_class;
-    control.panel_class.parent = PB_ORIGINAL_CLASS;
+    control.panel_class.parent = control.services.original_class;
     control.panel_class.methods = (uint32_t)(uintptr_t)control.methods;
-    control.panel_class.sizes = PB_CLASS_SIZES;
+    control.panel_class.sizes = control.services.class_sizes;
     control.panel_class.name = (uint32_t)(uintptr_t)"PC Suite Native Bridge";
     control.panel_class.magic = PB_MAGIC;
     control.panel_class.control = (uint32_t)(uintptr_t)&control;

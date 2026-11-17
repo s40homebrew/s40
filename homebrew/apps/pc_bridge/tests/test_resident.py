@@ -30,19 +30,22 @@ BUILD = Path(os.environ.get("S40_BUILD_DIR", HOMEBREW / "build/pc_bridge"))
 BASE, MESSAGE, REPLY, DATA, PAYLOAD = 0xD8400000, 0xD8600000, 0xD8610000, 0xD8620000, 0xD8630000
 STOP, SYNC, STACK = 0xF0110000, 0xF0111000, 0xD8FF0000
 ALLOC, FREE, NEW, DELETE, SEND, ORIGINAL = (
-    0xF04F0340,
-    0xF04EFA6E,
-    0xF0B9B856,
-    0xF0B9B868,
-    0xF04ED2F2,
-    0xF060FFC4,
+    0xF0121000,
+    0xF0121100,
+    0xF0121200,
+    0xF0121300,
+    0xF0121400,
+    0xF0121500,
 )
+SERVICES = 0xD8300000
+TASK = 0xF0121600
 REGS = (UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3)
 
 
 def image():
     sys.path.insert(0, str(HOMEBREW / "tools"))
     import pack
+
     elf = (BUILD / "resident/resident.elf").read_bytes()
     header = pack.ElfHeader(*struct.unpack_from("<16sHHIIIIIHHHHHH", elf))
     sections = [
@@ -69,7 +72,29 @@ class Firmware:
         self.heap = 0xD8700000
         self.alloc_ok = self.message_ok = True
         self.uc.hook_add(UC_HOOK_CODE, self.boundary)
-        self.control = self.call(entry)
+        # The resolver result belongs to the transient caller. The resident
+        # must copy every service before that caller's mapping is removed.
+        self.write(
+            SERVICES,
+            "<16I",
+            0xD80F0658,
+            0xF11717C0,
+            ORIGINAL | 1,
+            0x011C000D,
+            0xD80CD36C,
+            0xD80CC9F0,
+            TASK,
+            ALLOC | 1,
+            FREE | 1,
+            NEW | 1,
+            DELETE | 1,
+            SEND | 1,
+            0xD8000000,
+            0xDA000000,
+            0xF0100400,
+            0xF14DB000,
+        )
+        self.control = self.call(entry, SERVICES)
         assert self.word(self.control) == 0x53343042
         self.write(self.control + 8, "<II", BASE, len(binary))
         self.write(self.control + 36, "<II", SYNC, 0x12345678)

@@ -147,7 +147,7 @@ final class Rm217Bindings {
         r.exportCount = 0;
         if (r.error != 0)
             return false;
-        for (int i = 0; i < api.length; i++)
+        for (int i = 0; i < FirmwareApi.REQUIRED_COUNT; i++)
             if (!optional(i) && api[i] == 0)
                 return r.fail(FirmwareResolver.ERROR_UNBOUND_API, i);
         return true;

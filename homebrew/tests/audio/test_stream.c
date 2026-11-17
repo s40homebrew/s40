@@ -9,18 +9,13 @@
 
 #include "audio/commgr/driver.c"
 #include "audio/commgr/driver.h"
-#include "audio/devices/rm839_0233_imports.h"
-#ifdef TEST_RM443
-#include "audio/devices/registry.h"
+#include "audio/services.c"
+#include "firmware_api.h"
 static audio_abi model_abi;
 static int model_open(const s40_audio_format* format) { return audio_cm_open(&model_abi, format); }
 static const s40_audio_driver model_driver = {model_open, audio_cm_write, audio_cm_queued,
                                               audio_cm_status, audio_cm_close};
 #define S40_CM_DRIVER model_driver
-#else
-#include "audio/devices/rm839_0233.c"
-#define S40_CM_DRIVER s40_audio_rm839_0233
-#endif
 #include "audio/core.c"
 
 static unsigned allocations, fail_alloc, clock_ms, active_object, plays, closes;
@@ -308,16 +303,32 @@ int fw_audio_source_write(void* p, void* fragment) {
 
 int main(void) {
 #ifdef TEST_RM443
-    model_abi = audio_rm443_1012.configuration;
+    assert(audio_abi_configure(FW_AUDIO_ABI_CLASSIC, &model_abi));
 #ifdef TEST_LEGACY
-    model_abi = audio_rm217_0721.configuration;
+    assert(audio_abi_configure(FW_AUDIO_ABI_LEGACY, &model_abi));
     assert(model_abi.object_layout == AUDIO_CM_LEGACY && model_abi.policy == AUDIO_POLICY_NONE);
 #endif
-    model_abi.imports = (audio_imports)AUDIO_LINKED_IMPORTS(fw_audio_volume_scale);
-    abi = &model_abi;
 #else
-    abi = &rm839_0233_abi;
+    assert(audio_abi_configure(FW_AUDIO_ABI_DEVICE_MEDIA, &model_abi));
+    model_abi.transport = AUDIO_TRANSPORT_WAV;
+    model_abi.volume_percent = 0;
 #endif
+    model_abi.imports = (audio_imports){.register_object = fw_audio_cm_register,
+                                        .ready = fw_audio_cm_ready,
+                                        .unregister_object = fw_audio_cm_unregister,
+                                        .send = fw_audio_cm_send,
+                                        .delete_message = fw_audio_message_delete,
+                                        .source_create = fw_audio_source_create,
+                                        .source_share = fw_audio_source_share,
+                                        .source_limits = fw_audio_source_limits,
+                                        .source_id = fw_audio_source_id,
+                                        .source_forget = fw_audio_source_forget,
+                                        .source_eof = fw_audio_source_eof,
+                                        .fragment_init = fw_audio_fragment_init,
+                                        .source_write = fw_audio_source_write,
+                                        .class_call = fw_audio_class_call,
+                                        .volume_scale = fw_audio_volume_scale};
+    abi = &model_abi;
 
     s40_audio_format format = {11025, 2, 65, 0};
     int16_t samples[1024];

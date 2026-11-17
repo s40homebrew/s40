@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: MIT */
-/* Unknown identities and incomplete bindings fail before native calls. */
+/* Resolved capabilities are atomic; unavailable services never call firmware. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "audio/devices/registry.h"
+#include "audio/services.h"
 #include "firmware/bindings.h"
 #include "s40/audio.h"
 
@@ -24,54 +24,39 @@ void s40_pump(void) { abort(); }
 int main(void) {
     s40_audio_format format = {11025, 1, 60, 100};
     assert(!s40_audio_bind_device());
-    /* A trusted identity is required even when every prefix matches. */
-    uint32_t prefix[8] = {0};
-    audio_rom_binding binding = {(uintptr_t)prefix, 0x0b2ae445u};
-    audio_profile sample = {.clock_anchor = 0x12345679u,
-                            .parent_class = {(uintptr_t)prefix, 0x0b2ae445u},
-                            .configuration = {.volume_percent = 1},
-                            .bindings = {
-                                    .register_object = binding,
-                                    .ready = binding,
-                                    .unregister_object = binding,
-                                    .send = binding,
-                                    .delete_message = binding,
-                                    .source_create = binding,
-                                    .source_share = binding,
-                                    .source_limits = binding,
-                                    .source_id = binding,
-                                    .source_forget = binding,
-                                    .source_eof = binding,
-                                    .fragment_init = binding,
-                                    .source_write = binding,
-                                    .class_call = binding,
-                                    .volume_scale = binding,
-                            }};
-    audio_abi resolved, previous;
-    assert(audio_profile_resolve(&sample, 0x12345679u, &resolved));
-    assert((uintptr_t)resolved.imports.source_write == (uintptr_t)prefix);
-    memcpy(&previous, &resolved, sizeof(previous));
-    assert(!audio_profile_resolve(&sample, 0x12345678u, &resolved)); /* Thumb bit matters. */
-    ((uint8_t*)prefix)[31] = 1;
-    assert(!audio_profile_resolve(&sample, 0x12345679u, &resolved));
-    ((uint8_t*)prefix)[31] = 0;
-    sample.bindings.source_write.entry = 0;
-    assert(!audio_profile_resolve(&sample, 0x12345679u, &resolved));
-    sample.bindings.source_write = binding;
-    sample.bindings.volume_scale.entry = 0;
-    assert(!audio_profile_resolve(&sample, 0x12345679u, &resolved));
-    assert(!memcmp(&resolved, &previous, sizeof(resolved))); /* Failure cannot partially bind. */
-    sample.configuration.volume_percent = 0;
-    assert(audio_profile_resolve(&sample, 0x12345679u, &resolved));
-    sample.parent_class.address = 1; /* Unknown identity must not read this. */
-    assert(!audio_profile_resolve(&sample, 0x98765431u, &resolved));
-    uint32_t descriptor[4096] = {0};
+    uint32_t descriptor[FW_API_DESCRIPTOR + FW_API_COUNT] = {0};
+    uint32_t* services = descriptor + FW_API_DESCRIPTOR;
     s40_result = descriptor;
-    descriptor[FW_API_DESCRIPTOR + API_FW_OS_CURRENT_TIME_READ_IN_MS] = 0x12345679;
+    audio_abi resolved, previous;
+    assert(!audio_abi_from_services(services, &resolved));
+    for (unsigned i = FW_AUDIO_FIRST + 1; i < FW_AUDIO_LIMIT; ++i)
+        services[i] = 0x1000 + 4 * i + 1;
+    services[API_AUDIO_ABI] = FW_AUDIO_ABI_CLASSIC;
+    /* An ARM entry stays even; decoding must not invent a Thumb bit. */
+    services[API_AUDIO_VOLUME_SCALE] = 0x2000;
+    assert(audio_abi_from_services(services, &resolved));
+    assert(resolved.object_layout == AUDIO_CM_CLASSIC);
+    assert(resolved.transport == AUDIO_TRANSPORT_RAW_PCM);
+    assert((uintptr_t)resolved.imports.volume_scale == 0x2000);
+    assert((uintptr_t)resolved.imports.source_write == services[API_AUDIO_SOURCE_WRITE]);
+    memcpy(&previous, &resolved, sizeof(previous));
+    services[API_AUDIO_SOURCE_WRITE] = 0;
+    assert(!audio_abi_from_services(services, &resolved));
+    assert(!memcmp(&resolved, &previous, sizeof(resolved)));
     assert(!s40_audio_bind_device());
     assert(!s40_audio_status());
     assert(s40_audio_open(&format) < 0);
+    services[API_AUDIO_SOURCE_WRITE] = 0x3001;
+    services[API_AUDIO_ABI] = 99;
+    assert(!audio_abi_from_services(services, &resolved));
+    assert(!memcmp(&resolved, &previous, sizeof(resolved)));
+    assert(audio_abi_configure(FW_AUDIO_ABI_LEGACY, &resolved));
+    assert(resolved.object_layout == AUDIO_CM_LEGACY && resolved.policy == AUDIO_POLICY_NONE);
+    assert(audio_abi_configure(FW_AUDIO_ABI_DEVICE_IHF, &resolved));
+    assert(resolved.object_layout == AUDIO_CM_DEVICE && resolved.route == AUDIO_ROUTE_OWN_IHF);
+    assert(audio_abi_configure(FW_AUDIO_ABI_DEVICE_MEDIA, &resolved));
+    assert(resolved.policy == AUDIO_POLICY_EXPLICIT && resolved.route == AUDIO_ROUTE_EXISTING);
     s40_audio_close();
-    puts("PASS: profile identity, prefix and required-import gates; unresolved bindings stay unchanged");
+    puts("PASS: capability decoding, ARM/Thumb entries and incomplete-service rejection");
     return 0;
 }

@@ -18,13 +18,15 @@ native session.
 | `include/libc/` | Supported C/POSIX compatibility headers |
 | `src/java/launcher/` | Launcher UI, file picker and native session management |
 | `src/java/profiles/` | Device-family assumptions and discovery recipes |
-| `src/java/resolver/` | Bounded firmware discovery and validation |
+| `src/java/resolver/` | Shared memory, export and instruction discovery |
+| `src/java/resolver/services/` | Validated capability groups, including audio |
+| `src/firmware/signatures/` | Assembly signatures compiled into discovery recipes |
 | `src/bootstrap/` | Native loading, relocation and return to Java |
 | `src/native/core/` | Session lifetime, event dispatch and timing |
 | `src/native/display/` | Ordinary display, scaled video and device adapters |
 | `src/native/input/` | Key-to-action mapping |
 | `src/native/libc/` | Allocations, files, paths and C library integration |
-| `src/native/audio/` | PCM output, shared transport and device bindings |
+| `src/native/audio/` | PCM output and shared firmware transport |
 | `src/native/firmware/` | Private firmware interfaces and validation helpers |
 | `tools/` | Build support, generated contracts and packaging |
 
@@ -53,11 +55,26 @@ or for both normal and error exit; see [runtime.h](../include/s40/runtime.h).
 
 ## Discovery and optional drivers
 
-A model name selects a candidate profile. The resolver must still validate the
-firmware's code and data relationships before native entry. Unknown models and
-ambiguous matches are rejected. Optional drivers use additional exact-firmware
-checks and leave the ordinary service available when unsupported; applications
-can continue without optional audio.
+A model name selects a memory and bootstrap profile. One shared resolver context
+then validates the readable regions, named exports and instruction relationships.
+Audio, video and utilities obtain their services through that context. Native
+drivers consume the resolved bindings; they do not select firmware address tables.
+
+Applications request the optional capabilities they use. Each capability is
+published as a complete group or left unavailable, so a failed audio lookup does
+not prevent ordinary graphics or native startup. Cached results are reused only
+after their mappings, code and relationships are revalidated. Unknown or
+ambiguous matches remain unavailable.
+
+Native Time and RAM Booster share bounded discovery helpers with the
+runtime while retaining their smaller execution paths. Ports with their own
+bootstrap can use a service-only memory context. That context discovers optional
+services without claiming support for the shared native launcher.
+
+Firmware signatures are maintained as assembly. The build generates their Java
+recipe factories under its own `signatures/` directory before compiling the
+launcher; generated instruction arrays are not maintained source files. See
+[firmware signatures](firmware-signatures.md) for the source format.
 
 The native image and Java/bootstrap communication formats are defined once in
 [tools/native_contract.py](../tools/native_contract.py). The build generates

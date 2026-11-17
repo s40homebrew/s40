@@ -3,7 +3,7 @@
  * Allocation-free discovery shared by the standalone heap booster profiles.
  * No firmware function/global address is used as a search seed.
  */
-final class HeapPatchResolver {
+final class HeapPatchResolver implements RomSymbols.Reader {
     // Shared VM diagnostic, not a firmware identifier. It corroborates the code
     // recipe within the local initializer; the string alone never selects a site.
     private static final String FAILURE = "Failed to load main class";
@@ -13,48 +13,37 @@ final class HeapPatchResolver {
     // 15 Thumb-1 halfwords, not ARM words. STACK reloads the app from an SP slot;
     // FRAME reloads it from [r3+0x40]. Variant 2 differs at cfg+0x20 -> app+0x6c.
     // Keep observed address assertions in tests, and variant semantics here.
-    private static final int[] STACK = {0x9900, 0x68e0, 0x6588, 0x9900, 0x6960, 0x65c8, 0x9a00,
-            0x69a1, 0x2002, 0x6691, 0x9900, 0x66c8, 0x9900, 0x6a60, 0x6708};
-    private static final int[] FRAME = {0x68e0, 0x6c19, 0x6588, 0x6960, 0x6c19, 0x65c8, 0x69a0,
-            0x6c19, 0x6688, 0x6c19, 0x2002, 0x66c8, 0x6a60, 0x6c19, 0x6708};
+    private static final int[] STACK = HeapPatchPatterns.STACK();
+    private static final int[] FRAME = HeapPatchPatterns.FRAME();
     // Same fields as form 2, but the compiler reloads the app before cfg.
     // The preceding +18 store leaves R1=app, so the shared patch is valid.
-    private static final int[] FRAME_APP_FIRST = {0x6c19, 0x68e0, 0x6588, 0x6c19, 0x6960, 0x65c8,
-            0x6c19, 0x69a0, 0x6688, 0x6c19, 0x6a20, 0x66c8, 0x6c19, 0x6a60, 0x6708};
+    private static final int[] FRAME_APP_FIRST = HeapPatchPatterns.FRAME_APP_FIRST();
     // App-first with a constant +6c store through R0 (302). Its preceding
     // +18 store leaves R0=app, so the patch must reload R1 before using it.
-    private static final int[] FRAME_APP_CONSTANT = {0x6c19, 0x68e0, 0x6588, 0x6c19, 0x6960, 0x65c8,
-            0x6c19, 0x69a0, 0x6688, 0x6c18, 0x2102, 0x66c1, 0x6c19, 0x6a60, 0x6708};
-    private static final int[] PATCH_APP_CONSTANT = {0x6c19, 0x68e0, 0x6588, 0x2805, 0x6960, 0xd101,
-            0x2000, 0x0500, 0x65c8, 0x69a0, 0x6688, 0x2002, 0x66c8, 0x6a60, 0x6708};
+    private static final int[] FRAME_APP_CONSTANT = HeapPatchPatterns.FRAME_APP_CONSTANT();
+    private static final int[] PATCH_APP_CONSTANT = HeapPatchPatterns.PATCH_APP_CONSTANT();
     // Replacement: app+0x58=type; app+0x5c=(type==5 ? MiB<<20 : cfg+0x14);
     // then preserve app+0x68/+0x6c/+0x70. R1 already holds app at entry. In the
     // 301 STACK context R2 already holds app too; the removed R2 reload is dead.
     // Compare/shift flags are overwritten before use after this block. A new
     // recipe must check live registers, flags and incoming branches in context;
     // matching the stores alone is insufficient. See apps/ram_booster/docs/porting.md.
-    private static final int[] PATCH = {0x68e0, 0x6588, 0x2805, 0xd102, 0x2000, 0x0500, 0xe000,
-            0x6960, 0x65c8, 0x69a0, 0x6688, 0x2002, 0x66c8, 0x6a60, 0x6708};
+    private static final int[] PATCH = HeapPatchPatterns.PATCH();
     // Older frame initializer (6303 08.90): the tail initializes +60/+64,
     // not +6c/+70. Loading the default quota between CMP and BNE preserves
     // flags and saves a branch, leaving room for those stores in 30 bytes.
-    private static final int[] FRAME_ZERO = {0x68e0, 0x6c19, 0x6588, 0x6960, 0x6c19, 0x65c8, 0x69a0,
-            0x6c19, 0x6688, 0x6c18, 0x4900, 0x6606, 0x6c18, 0x1d09, 0x6646};
-    private static final int[] PATCH_ZERO = {0x68e0, 0x6588, 0x2805, 0x6960, 0xd101, 0x2000, 0x0500,
-            0x65c8, 0x69a0, 0x6688, 0x0008, 0x4900, 0x6606, 0x1d09, 0x6646};
+    private static final int[] FRAME_ZERO = HeapPatchPatterns.FRAME_ZERO();
+    private static final int[] PATCH_ZERO = HeapPatchPatterns.PATCH_ZERO();
     // Legacy zero-tail initializer. R7 was cleared just before this block;
     // preserve both zero stores and the following frame/literal loads. The
     // next LSLS overwrites our comparison flags before any conditional use.
-    private static final int[] FRAME_LEGACY = {0x68e0, 0x6c19, 0x6588, 0x6960, 0x6c19, 0x65c8,
-            0x69a0, 0x6c19, 0x6688, 0x6c18, 0x6607, 0x6c18, 0x6647, 0x6b98, 0x4900};
-    private static final int[] PATCH_LEGACY = {0x68e0, 0x6588, 0x2805, 0x6960, 0xd101, 0x2000,
-            0x0500, 0x65c8, 0x69a0, 0x6688, 0x660f, 0x664f, 0x46c0, 0x6b98, 0x4900};
+    private static final int[] FRAME_LEGACY = HeapPatchPatterns.FRAME_LEGACY();
+    private static final int[] PATCH_LEGACY = HeapPatchPatterns.PATCH_LEGACY();
     // Full-touch frame: cfg in R7, app in frame+44, tail fields at +74/+78.
-    private static final int[] FRAME_TOUCH = {0x6c59, 0x68f8, 0x6588, 0x6c59, 0x6978, 0x65c8,
-            0x6c59, 0x69b8, 0x6688, 0x6c59, 0x2002, 0x6748, 0x6c59, 0x6a78, 0x6788};
-    private static final int[] PATCH_TOUCH = {0x68f8, 0x6588, 0x2805, 0xd102, 0x2000, 0x0500,
-            0xe000, 0x6978, 0x65c8, 0x69b8, 0x6688, 0x2002, 0x6748, 0x6a78, 0x6788};
+    private static final int[] FRAME_TOUCH = HeapPatchPatterns.FRAME_TOUCH();
+    private static final int[] PATCH_TOUCH = HeapPatchPatterns.PATCH_TOUCH();
     final HeapBoosterProfile profile;
+    private final RomSymbols exports = new RomSymbols(this);
     final int[] original = new int[15];
     final int[] replacement = new int[15];
     int site, variant, currentMiB, poolBytes, poolBase, cacheSync;
@@ -65,28 +54,14 @@ final class HeapPatchResolver {
     private int messageNew, messageSend;
     private int recipeAlloc, recipeFree, recipeReader, recipeAllocs, recipeFrees, recipeReaders;
     private int legacyScheduler, legacySchedulers, fixedInitializer;
-    private static final int[] LEGACY_SCHEDULER = {0xb510, 0, 0, 0x2800, 0xd027, 0, 0, 0x2800,
-            0xd124, 0, 0, 0x2800, 0xd105, 0x2001, 0, 0, 0, 0, 0xe011};
-    private static final int[] LEGACY_RESET = {0xb510, 0, 0, 0x2800, 0xd00b, 0, 0, 0, 0, 0x1c43,
-            0xd101, 0, 0, 0, 0, 0, 0, 0x2000, 0, 0, 0, 0, 0x2200, 0x2118, 0x2000, 0, 0, 0, 0,
-            0xbd10};
-    private static final int[] LEGACY_REINIT = {0xb510, 0, 0, 0x2800, 0xd10d, 0x2100, 0x207d,
-            0x0380, 0, 0, 0x2005, 0, 0, 0, 0, 0x1c43, 0xd102, 0, 0, 0xbd10, 0x2800, 0xd1fc, 0, 0, 0,
-            0, 0x2001, 0, 0, 0xbd10};
-    private static final int[] LEGACY_VM_HEAD = {
-            0xb5f0, 0x4e00, 0xb0ff, 0x2500, 0x1c30, 0xb0c6, 0x3050, 0x6035, 0x7005};
-    private static final int[] LEGACY_VM_LINK = {0x6830, 0x2701, 0x4338, 0x6030, 0, 0, 0x95c4,
-            0x4900, 0x4a00, 0x6808, 0x90c3, 0xa8c0, 0x6008, 0xa860, 0x90c0, 0x6810, 0x90c2, 0xa860,
-            1, 1, 0x1c07, 0xd110, 0x4e00, 0x4668, 0x6030, 1, 1, 0x2800, 0xd106, 0, 0, 0, 0, 0x4900,
-            0x6008};
-    private static final int[] LEGACY_HEAP_WRAPPER = {
-            0x4800, 0xb510, 0x2400, 0x6004, 0x4800, 0x6004, 0, 0, 0, 0, 0, 0};
-    private static final int[] LEGACY_HEAP_INIT = {0xb570, 0x4d00, 0x2400, 0x606c, 1, 1, 0x4900,
-            0x2000, 0x1c23, 0x00c2, 0x508b, 0x1852, 0x3001, 0x2874, 0x6053, 0xdbf8, 0x4a00, 0x2001,
-            0x604a, 0x6028, 0xbd70};
-    private static final int[] FIXED_RESET = {0xb570, 0x0005, 0x000e, 0x200c, 0, 0, 0x21db, 0x7041,
-            0x0e29, 0x7101, 0x0c29, 0x7141, 0x0a29, 0x7181, 0x2100, 0x71c5, 0x7201, 0x7241, 0x0a31,
-            0x7281, 0x0004, 0x72c6, 0, 0, 0x0001, 0x0023, 0x22e1, 0x207a, 0, 0, 0xbd70};
+    private static final int[] LEGACY_SCHEDULER = HeapPatchPatterns.LEGACY_SCHEDULER();
+    private static final int[] LEGACY_RESET = HeapPatchPatterns.LEGACY_RESET();
+    private static final int[] LEGACY_REINIT = HeapPatchPatterns.LEGACY_REINIT();
+    private static final int[] LEGACY_VM_HEAD = HeapPatchPatterns.LEGACY_VM_HEAD();
+    private static final int[] LEGACY_VM_LINK = HeapPatchPatterns.LEGACY_VM_LINK();
+    private static final int[] LEGACY_HEAP_WRAPPER = HeapPatchPatterns.LEGACY_HEAP_WRAPPER();
+    private static final int[] LEGACY_HEAP_INIT = HeapPatchPatterns.LEGACY_HEAP_INIT();
+    private static final int[] FIXED_RESET = HeapPatchPatterns.FIXED_RESET();
     int sites, pools, caches, error;
     int alloc, free, allocators;
     int romEnd, ramEnd;
@@ -180,51 +155,37 @@ final class HeapPatchResolver {
         return true;
     }
     private void allocator(int p) {
-        // Same 36-byte Nokia descriptor / ELF32 symbol format used by the full
-        // homebrew resolver. Only OS allocations are wanted: NW_Mem_Malloc is
-        // app-owned and must not back a code page surviving MIDlet exit.
-        if (!rom(p, 36) || !textAt(word(p), SYSTEM))
+        // OS allocations must outlive this MIDlet; app-owned allocators cannot
+        // back resident code. Decode their exports through the shared reader.
+        int limit = romEnd - profile.romStart;
+        if (!rom(p, 36) || !textAt(word(p), SYSTEM) || !exports.validate(p, limit, false))
             return;
-        int hash = word(p + 24), strings = word(p + 28), symbols = word(p + 32);
-        if ((hash & 3) != 0 || (symbols & 3) != 0 || !rom(hash, 8))
+        int a = exports.find(p, ALLOC, RomSymbols.FUNCTION, limit, false);
+        if (exports.malformed || a == 0)
             return;
-        int count = word(hash + 4);
-        if (count < 2 || count > 8192 || !rom(symbols, count * 16))
+        int f = exports.find(p, FREE, RomSymbols.FUNCTION, limit, false);
+        if (exports.malformed || f == 0)
             return;
-        int a = 0, f = 0, newMessage = 0, sendMessage = 0;
-        for (int i = 1; i < count; i++) {
-            int s = symbols + 16 * i, off = word(s), value = word(s + 4);
-            if (off < 0 || off > romEnd - profile.romStart || !rom(value & ~1, 4)
-                    || (word(s + 12) & 255) != 0x12)
-                continue;
-            if (textAt(strings + off, ALLOC)) {
-                if (a != 0)
-                    return;
-                a = value;
-            }
-            if (textAt(strings + off, FREE)) {
-                if (f != 0)
-                    return;
-                f = value;
-            }
-            if (textAt(strings + off, MESSAGE_NEW)) {
-                if (newMessage != 0)
-                    return;
-                newMessage = value;
-            }
-            if (textAt(strings + off, MESSAGE_SEND)) {
-                if (sendMessage != 0)
-                    return;
-                sendMessage = value;
-            }
-        }
-        if (a != 0 && f != 0) {
-            allocators++;
-            alloc = a;
-            free = f;
-            messageNew = newMessage;
-            messageSend = sendMessage;
-        }
+        int newMessage = exports.find(p, MESSAGE_NEW, RomSymbols.FUNCTION, limit, false);
+        if (exports.malformed)
+            return;
+        int sendMessage = exports.find(p, MESSAGE_SEND, RomSymbols.FUNCTION, limit, false);
+        if (exports.malformed)
+            return;
+        allocators++;
+        alloc = a;
+        free = f;
+        messageNew = newMessage;
+        messageSend = sendMessage;
+    }
+    public boolean containsRom(int address, int bytes) {
+        return rom(address, bytes);
+    }
+    public int readWord(int address) {
+        return (address & 3) == 0 && rom(address, 4) ? word(address) : 0;
+    }
+    public boolean matchesText(int address, String wanted) {
+        return textAt(address, wanted);
     }
     private void memoryRecipe(int p, int first, int second) {
         if (first == 0xb5f0 && second == 0x1c06
@@ -751,21 +712,13 @@ final class HeapPatchResolver {
             free = word(p + 20);
         }
     }
-    private static final int[] DIRECT_CACHE = {0xE92D4070, 0xE0805001, 0xE3C0001F, 0xEE070F3E,
-            0xEE070F35, 0xE2800020, 0xEE070F3E, 0xEE070F35, 0xE2800020, 0xE1500005, 0x3AFFFFF7,
-            0xEE075F9A, 0xE8BD8070};
+    private static final int[] DIRECT_CACHE = HeapPatchPatterns.DIRECT_CACHE();
     // RAPU's ARM I-cache range helper, including the outer-cache tail call.
     // Only that call's relocation varies. The other RAPU form enters Thumb.
-    private static final int[] RAPU_ARM_ICACHE = {0xE92D4001, 0xE3A0E000, 0xE1A02000, 0xE0813000,
-            0xE2433001, 0xEC423F05, 0xEE07EF95, 0xEC423F05, 0xEE07EF95, 0xEE072FF5, 0xEE07EF9A,
-            0xEE07EF95};
+    private static final int[] RAPU_ARM_ICACHE = HeapPatchPatterns.RAPU_ARM_ICACHE();
     // Leaf ARM11 range synchronizer: clean D range, invalidate I range twice,
     // synchronize branch targets/prefetch, preserving incoming interrupt state.
-    private static final int[] XGOLD_CACHE = {0xe0811000, 0xe2411001, 0xe1a02000, 0xe3a0c01f,
-            0xe1c1100c, 0xe1c0000c, 0xe3a0c007, 0xe1c2200c, 0xe3a0c000, 0xee07cf9a, 0xe10f3000,
-            0xf10c00c0, 0xec401f0c, 0xee07cf9a, 0xe12ff003, 0xee07cfba, 0xe10f3000, 0xf10c00c0,
-            0xec401f05, 0xee07cf95, 0xec401f05, 0xee07cf95, 0xee072ff5, 0xee07cf9a, 0xee07cf95,
-            0xe12ff003, 0xe12fff1e};
+    private static final int[] XGOLD_CACHE = HeapPatchPatterns.XGOLD_CACHE();
     private void cacheLeaf(int p) {
         if (!rom(p, XGOLD_CACHE.length * 4))
             return;

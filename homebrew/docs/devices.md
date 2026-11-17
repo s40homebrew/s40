@@ -7,19 +7,19 @@ native code starts. Similar model names do not imply compatibility.
 | Phone | Shared native launcher | Optional PCM audio |
 | --- | --- | --- |
 | Nokia 6300 / RM-217 | 07.21, 07.30; provisional | 07.21, 07.30; provisional |
-| Nokia 6303 classic / RM-443 | 08.90, 10.12 | 10.12; speaker playback supported |
+| Nokia 6303 classic / RM-443 | 08.90, 10.12 | 08.90 (provisional), 10.12 |
 | Nokia C3-00 / RM-614 | 04.60, 08.63 | 04.60, 08.63; provisional |
 | Asha 302 / RM-813 | No shared launcher | 14.53; standalone binding, provisional |
-| Nokia 301 / RM-839 | No shared launcher | 09.04 standalone binding, provisional; 02.33 explicitly linked Quake adapter |
+| Nokia 301 / RM-839 | No shared launcher | 02.33, 09.04; standalone bindings, provisional |
 
-Provisional support is included but has not been validated on the corresponding
-handset. Native launcher discovery can support other firmware versions in a
-family; audio bindings require the exact listed build. A standalone audio
-binding requires a port to supply its own bootstrap, native services and message
-pump.
+Provisional features have matching firmware layouts but still need handset
+validation. Discovery checks the running firmware rather than selecting from
+a version allowlist; other versions can work when their layouts and service
+relationships match. Standalone audio support requires a port to supply its own
+bootstrap, native services and message pump.
 
 All shared-launcher profiles provide ordinary graphics. The optional accelerated
-RGB565 display and keep-awake request currently support RM-443 10.12; other
+RGB565 display and keep-awake request support RM-443 08.90 and 10.12; other
 profiles use ordinary output. The 6300 and 6303 screens are 240×320 with a numeric
 keypad; C3-00 is 320×240 with a QWERTY keyboard. Apps choose bindings using the
 reported input layout.
@@ -35,7 +35,8 @@ a shared native launcher profile.
 - [Native Time](../examples/native_time/README.md) supports 6303 classic and
   Asha 302.
 - [Battery Info](../apps/battery/README.md) and
-  [PC Bridge](../apps/pc_bridge/README.md) require RM-443 10.12.
+  [PC Bridge](../apps/pc_bridge/README.md) support RM-443 08.90 and 10.12;
+  08.90 is provisional.
 - [Heap Check](../apps/heap_check/README.md) is ordinary Java ME and uses no
   native firmware access.
 
@@ -46,9 +47,10 @@ and device captures outside the public repository.
 
 1. Establish the device's readable memory regions, Java/native calling
    conventions and executable-memory rules.
-2. Add a family profile under `src/java/profiles/` and bounded discovery rules
-   under `src/java/resolver/`. Resolve services from validated relationships;
-   do not select a fixed address table from a model string alone.
+2. Add memory and bootstrap assumptions under `src/java/profiles/`. Capability
+   modules under `src/java/resolver/services/` use the shared exports, decoders
+   and bounded search helpers, then publish a complete generated binding group.
+   Native drivers consume that group without repeating discovery.
 3. Verify allocation, file, timer, event and display behavior. Add differences
    to runtime adapters while keeping application-facing APIs shared.
 4. Register an unambiguous model identity and check malformed or conflicting

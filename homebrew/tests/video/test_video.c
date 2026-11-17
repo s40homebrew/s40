@@ -8,7 +8,7 @@
 #include "s40/runtime.h"
 #include "s40/video.h"
 #include "display/video_internal.h"
-#include "display/rm443_1012/driver.h"
+#include "display/rm443/driver.h"
 
 static uint32_t result[1200];
 uint32_t* s40_result = result;

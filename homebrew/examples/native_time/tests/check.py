@@ -24,7 +24,10 @@ with ZipFile(jar) as archive:
             data = archive.read(name)
             assert data == (build / "preverified" / name).read_bytes()
             assert struct.unpack_from(">IHH", data) == (0xCAFEBABE, 3, 45)
-            assert b"StackMap" in data
+            # Branching session/resolver code needs CLDC stack maps. Interfaces
+            # and straight-line generated array factories need none.
+            if name in ("NativeTime.class", "TimeResolver.class", "RapuTimeResolver.class"):
+                assert b"StackMap" in data
 jad = (dist / "NativeTime.jad").read_text()
 assert f"MIDlet-Jar-Size: {jar.stat().st_size}\n" in jad
 assert "MIDlet-Jar-URL: NativeTime.jar\n" in jad
@@ -33,7 +36,14 @@ host = build / "host"
 host.mkdir(exist_ok=True)
 classpath = os.pathsep.join(map(str, (build / "preverified", host, SDK_CLASSES)))
 subprocess.run(
-    [java_tool("javac"), "-cp", classpath, "-d", str(host), str(project / "tests/CheckCarrier.java")],
+    [
+        java_tool("javac"),
+        "-cp",
+        classpath,
+        "-d",
+        str(host),
+        str(project / "tests/CheckCarrier.java"),
+    ],
     check=True,
 )
 subprocess.run(

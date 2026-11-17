@@ -94,12 +94,20 @@ final class NativeSession {
         this(profile, resource, null);
     }
 
+    NativeSession(FirmwareProfile profile, String resource, int capabilities) {
+        this(profile, resource, null, capabilities);
+    }
+
     NativeSession(FirmwareProfile profile, String resource, Progress progress) {
+        this(profile, resource, progress, FirmwareResolver.DEFAULT_CAPABILITIES);
+    }
+
+    NativeSession(FirmwareProfile profile, String resource, Progress progress, int capabilities) {
         this.profile = profile;
         this.resource = resource;
         this.progress = progress;
         result = new int[FirmwareApi.DESCRIPTOR + FirmwareApi.COUNT];
-        resolver = new FirmwareResolver(profile);
+        resolver = new FirmwareResolver(profile, capabilities);
     }
 
     /** Synchronous call on the launcher's worker thread. No UI during forging. */

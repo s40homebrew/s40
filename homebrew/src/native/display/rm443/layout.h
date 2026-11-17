@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* Partial RM-443 10.12 layouts, valid only after the adapter identity guard.
+/* Partial RM-443 layouts, validated by the shared firmware resolver.
  * Firmware addresses are 32-bit words even when host-side tools include this
  * header. Reserved spans are intentionally unnamed: their purpose is not part
  * of the transport contract. No structure here claims a complete firmware ABI.
@@ -8,6 +8,8 @@
 #define S40_VIDEO_RM443_LAYOUT_H
 #include <stddef.h>
 #include <stdint.h>
+
+#include "bindings.h"
 
 typedef struct {
     uint8_t watchdog_timer, watchdog_armed, dma_armed, reserved03;
@@ -80,13 +82,9 @@ enum {
     RM443_SCREEN_WIDTH = 240,
     RM443_SCREEN_HEIGHT = 320,
     RM443_FRAME_WORDS = RM443_SCREEN_WIDTH * RM443_SCREEN_HEIGHT / 2,
-    RM443_JAVA_TASK = 16,
     RM443_JAVA_FOREGROUND = 3,
-    RM443_TIMER_MESSAGE_LAST = 488,
-    RM443_RESOURCE_COUNT = 178,
     RM443_SCRATCHPAD_DISPLAY = 1,
     RM443_CM_SUBSCRIPTIONS_DIRTY = 1,
-    RM443_PERIODIC_TIMER = 259,
     RM443_PERIODIC_TICKS = 1000,
     RM443_TIMER_STOPPED = 1,
     RM443_TIMER_ACTIVE = 2,
@@ -123,20 +121,26 @@ enum {
 };
 
 #define RM443_PTR(type, address) ((volatile type*)(uintptr_t)(address))
-#define RM443_LCD RM443_PTR(rm443_lcd_state, 0xd80bcc18u)
-#define RM443_LCD_PENDING RM443_PTR(rm443_lcd_pending, 0xd80bd178u)
-#define RM443_DISPLAY_HOOKS RM443_PTR(rm443_display_hooks, 0xd8071b78u)
-#define RM443_FOREGROUND_SLOT RM443_PTR(uint32_t, 0xd8176954u)
-#define RM443_JAVA_SERVER RM443_PTR(rm443_java_server, 0xd8176d88u)
-#define RM443_JAVA_TASK_SLOT RM443_PTR(uint32_t, 0xd80cd3acu)
-#define RM443_JAVA_QUEUE 0xd80cf2e4u
-#define RM443_SCRATCHPAD_RESOURCES RM443_PTR(uint8_t, 0xd803b25bu)
-#define RM443_OS_RESOURCES RM443_PTR(rm443_os_resource, 0xd80c57dcu)
-#define RM443_PERIODIC_TIMER_STATE RM443_PTR(uint8_t, 0xd80c33e2u)
-#define RM443_LCD_CONTROL RM443_PTR(uint32_t, 0xffd22208u)
-#define RM443_GPIO RM443_PTR(rm443_gpio_registers, 0xffd31c00u)
+#define RM443_LCD RM443_PTR(rm443_lcd_state, RM443_BINDING(LCD_STATE))
+#define RM443_LCD_PENDING RM443_PTR(rm443_lcd_pending, RM443_BINDING(LCD_PENDING))
+#define RM443_DISPLAY_HOOKS RM443_PTR(rm443_display_hooks, RM443_BINDING(DISPLAY_HOOKS))
+#define RM443_FOREGROUND_SLOT RM443_PTR(uint32_t, RM443_BINDING(FOREGROUND_SLOT))
+#define RM443_JAVA_SERVER RM443_PTR(rm443_java_server, RM443_BINDING(JAVA_SERVER))
+#define RM443_JAVA_TASK_SLOT RM443_PTR(uint32_t, RM443_BINDING(JAVA_TASK_SLOT))
+#define RM443_JAVA_QUEUE RM443_BINDING(JAVA_QUEUE)
+#define RM443_SCRATCHPAD_RESOURCES RM443_PTR(uint8_t, RM443_BINDING(SCRATCHPAD_RESOURCES))
+#define RM443_OS_RESOURCES RM443_PTR(rm443_os_resource, RM443_BINDING(OS_RESOURCES))
+#define RM443_PERIODIC_TIMER_STATE RM443_PTR(uint8_t, RM443_BINDING(PERIODIC_TIMER_STATE))
+#define RM443_LCD_CONTROL RM443_PTR(uint32_t, RM443_BINDING(LCD_CONTROL))
+#define RM443_GPIO RM443_PTR(rm443_gpio_registers, RM443_BINDING(GPIO))
+
+#define RM443_JAVA_TASK RM443_BINDING(JAVA_TASK_ID)
+#define RM443_RESOURCE_COUNT RM443_BINDING(RESOURCE_COUNT)
+#define RM443_PERIODIC_TIMER RM443_BINDING(PERIODIC_TIMER_ID)
 
 static inline int rm443_ram_object(uintptr_t address, size_t bytes) {
-    return address >= 0xd8000000u && address <= 0xda000000u - bytes && !(address & 3u);
+    uintptr_t start = RM443_BINDING(RAM_START), end = RM443_BINDING(RAM_END);
+    return end > start && bytes <= end - start && address >= start && address <= end - bytes &&
+           !(address & 3u);
 }
 #endif

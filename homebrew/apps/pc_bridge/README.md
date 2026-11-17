@@ -1,8 +1,9 @@
 # S40 PC Bridge
 
-Install a native PC Suite debugging bridge on Nokia 6303 classic RM-443 firmware
-10.12. It supports memory inspection, tracked native allocations and short
-ARM/Thumb calls from a computer. The separate host client lives under
+Install a native PC Suite debugging bridge on Nokia 6303 classic RM-443.
+See [device compatibility](../../docs/devices.md) for available firmware support.
+It supports memory inspection, tracked native allocations and short ARM/Thumb
+calls from a computer. The separate host client lives under
 `$S40_RESEARCH_ROOT/tools/pcsuite/`; follow its README for connection and command
 usage. The phone installer builds without that tool.
 
@@ -20,7 +21,8 @@ MIDlet automatically; failure leaves diagnostics on screen. Exit closes that
 error screen.
 
 The bridge remains resident after the MIDlet exits. Reboot removes it and its
-allocations. Original PC Suite messages continue to use their normal handler.
+allocations. Reboot before installing a newer bridge version over a resident
+bridge. Original PC Suite messages continue to use their normal handler.
 Native calls execute synchronously on a firmware task: payloads must return
 promptly and preserve the calling convention. The bridge provides no exception
 recovery, preemption or isolated task for a payload.

@@ -8,11 +8,14 @@ APP=ram_booster
 ARTIFACT=S40RamBooster
 # shellcheck source=homebrew/tools/midlet_build.sh
 source "$P/tools/midlet_build.sh"
-SOURCES=("$A"/src/*.java)
+source "$P/tools/sources.sh"
+s40_generate_signatures "$B/signatures" "$P/src/firmware/signatures/profiles/Rm217MemoryPatterns.S" "$A"/signatures/*.S
+SOURCES=("$A"/src/*.java "${S40_SIGNATURE_JAVA_SOURCES[@]}")
 while IFS= read -r source; do
     SOURCES+=("$P/$source")
 done < "$A/shared-java.txt"
 N="$A/native"
+python3 "$P/tools/gen_signatures.py" --format c --llvm "$LLVM" "$B/native-signatures" "$N"/signatures/*.S
 python3 "$A/tools/generate_protocol.py" "$A/src/HeapBoosterProtocol.java" "$B/heap_booster_protocol.h"
 # Both current backends enter ARM state through the shared Thumb carrier. Future
 # architectures need a matched payload + carrier selection; changing -march

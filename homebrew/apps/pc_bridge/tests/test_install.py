@@ -3,19 +3,33 @@
 """Execute actual installer and resident ARM with explicit firmware stubs."""
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from test_resident import APP, BUILD, HOMEBREW, ORIGINAL, SYNC, Firmware
+from test_resident import (
+    ALLOC,
+    APP,
+    BUILD,
+    DELETE,
+    FREE,
+    HOMEBREW,
+    NEW,
+    ORIGINAL,
+    SEND,
+    SYNC,
+    TASK,
+    Firmware,
+)
 from unicorn import UC_HOOK_MEM_WRITE
 from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0
 
 CODE, RESULT = 0xD8200000, 0xD8100000
 PANEL, CONTEXT, RECORD = 0xD8010000, 0xD8020000, 0xD8030010
-TASK, ERROR, TIME = 0xF0ADAAE0, 0xF0112000, 0xF0113000
+ERROR, TIME = 0xF0112000, 0xF0113000
 ORIGINAL_CLASS = 0xF11717C0
 
 
@@ -29,9 +43,9 @@ def compile_installer(directory):
 typedef unsigned u32;
 u32* s40_result = (u32*)0xd8100000;
 void* fw_os_block_alloc_no_wait(unsigned n) {
-    return ((void* (*)(unsigned))0xf04f0341)(n);
+    return ((void* (*)(unsigned))0xf0121001)(n);
 }
-void fw_os_block_dealloc(void* p) { ((void (*)(void*))0xf04efa6f)(p); }
+void fw_os_block_dealloc(void* p) { ((void (*)(void*))0xf0121101)(p); }
 u32 fw_os_current_time_read_in_ms(void) { return ((u32 (*)(void))0xf0113000)(); }
 __attribute__((noreturn)) void s40_error(const char* text, ...) {
     ((void (*)(const char*))0xf0112000)(text);
@@ -114,7 +128,36 @@ class Installer(Firmware):
         self.write(RECORD, "<IIIHBB", PANEL, 0, ORIGINAL | 1, 0x600, 1, 0)
         self.write(ORIGINAL_CLASS, "<I", ORIGINAL_CLASS)
         self.write(ORIGINAL, "<I", 0xB0A9B5FF)
-        self.write(RESULT + 4 * (1120 + 24), "<I", SYNC)
+        api = {
+            name: int(value, 0)
+            for name, value in re.findall(
+                r"#define (API_\w+|FW_API_DESCRIPTOR) (0x[0-9A-Fa-f]+|[0-9]+)",
+                (BUILD / "firmware_api.h").read_text(),
+            )
+        }
+        self.api = api
+        bindings = dict(
+            CACHE_SYNC=SYNC,
+            FW_OS_BLOCK_ALLOC_NO_WAIT=ALLOC | 1,
+            FW_OS_BLOCK_DEALLOC=FREE | 1,
+            BRIDGE_ABI=1,
+            BRIDGE_PANEL_POINTER=0xD80F0658,
+            BRIDGE_ORIGINAL_CLASS=ORIGINAL_CLASS,
+            BRIDGE_ORIGINAL_RX=ORIGINAL | 1,
+            BRIDGE_CLASS_SIZES=0x011C000D,
+            BRIDGE_TASK_CONTEXTS=0xD80CD36C,
+            BRIDGE_DEVICE=0xD80CC9F0,
+            BRIDGE_OBJECT_TASK=TASK,
+            BRIDGE_MESSAGE_NEW=NEW | 1,
+            BRIDGE_MESSAGE_DELETE=DELETE | 1,
+            BRIDGE_CALL_CLASS3=SEND | 1,
+            BRIDGE_RAM_START=0xD8000000,
+            BRIDGE_RAM_END=0xDA000000,
+            BRIDGE_ROM_START=0xF0100400,
+            BRIDGE_ROM_END=0xF14DB000,
+        )
+        for name, value in bindings.items():
+            self.write(RESULT + 4 * (api["FW_API_DESCRIPTOR"] + api["API_" + name]), "<I", value)
         self.uc.hook_add(UC_HOOK_MEM_WRITE, self.publication)
 
     def boundary(self, uc, address, size, data):
@@ -128,7 +171,7 @@ class Installer(Firmware):
             uc.reg_write(UC_ARM_REG_R0, 5 if address == TASK else 0x12345678)
             uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
             return
-        if address == 0xF04F0340:
+        if address == ALLOC:
             self.allocations.append(uc.reg_read(UC_ARM_REG_R0))
         super().boundary(uc, address, size, data)
 
@@ -196,11 +239,12 @@ class InstallerTests(unittest.TestCase):
         self.reject_unchanged()
         self.assertEqual(self.f.allocations, [])
 
-    def test_wrong_rom_before_task_lookup(self):
-        for address in (ORIGINAL, ORIGINAL_CLASS):
-            with self.subTest(address=hex(address)):
+    def test_unavailable_capability_before_task_lookup(self):
+        for contract in (0, 99):
+            with self.subTest(contract=contract):
                 self.f = Installer(self.binary, self.entry)
-                self.f.write(address, "<I", 0xE12FFF1E)
+                offset = self.f.api["FW_API_DESCRIPTOR"] + self.f.api["API_BRIDGE_ABI"]
+                self.f.write(RESULT + 4 * offset, "<I", contract)
                 self.reject_unchanged()
                 self.assertEqual(self.f.task_lookups, 0)
                 self.assertEqual(self.f.allocations, [])

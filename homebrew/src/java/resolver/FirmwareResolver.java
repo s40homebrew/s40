@@ -5,13 +5,18 @@
  * The mapping window and VM ABI are model-family assumptions. No function or
  * global address from the reference firmware is present in this class.
  */
-final class FirmwareResolver {
+final class FirmwareResolver implements RomSymbols.Reader {
+    static final int CAP_AUDIO = 1, CAP_VIDEO = 2, CAP_BATTERY = 4, CAP_BRIDGE = 8;
+    static final int DEFAULT_CAPABILITIES = CAP_AUDIO | CAP_VIDEO;
+    private final int requestedCapabilities;
+
     // Stable diagnostic codes shown by the MIDlet and checked by host tests.
     static final int ERROR_NONE = 0;
     static final int ERROR_MEMORY_VIEW = 101;
     static final int ERROR_LITERAL_LOAD = 102;
     static final int ERROR_THUMB_CALL = 103;
     static final int ERROR_ARM_BRANCH = 104;
+    static final int ERROR_THUMB_BRANCH = 105;
     static final int ERROR_RANGE_PATTERN = 110;
     static final int ERROR_ROM_BOUNDS = 111;
     static final int ERROR_PATTERN_COUNT = 112;
@@ -38,18 +43,6 @@ final class FirmwareResolver {
     // Preserve the existing on-device diagnostic number.
     static final int ABI_LCD_RESOURCE = 9;
 
-    // Shared ELF32/SysV formats. Nokia descriptor offsets live in the profile.
-    private static final int ELF_HASH_HEADER_BYTES = 8;
-    private static final int ELF_HASH_CHAIN_COUNT_OFFSET = 4;
-    private static final int ELF_SYMBOL_BYTES = 16;
-    private static final int ELF_SYMBOL_VALUE_OFFSET = 4;
-    private static final int ELF_SYMBOL_TYPE_OFFSET = 12;
-    private static final int ELF_ABSOLUTE_FUNCTION = 0xFFF10012;
-    private static final int ELF_ABSOLUTE_OBJECT = 0xFFF10011;
-    private static final int ELF_FUNCTION_INFO = 0x12;
-    private static final int MAX_HASH_ENTRIES = 8192;
-    private static final int SYSV_HASH_HIGH_BITS = 0xF0000000;
-
     // ARMv5/Thumb encodings: operands below are decoded, never called here.
     private static final int THUMB_OPCODE_MASK = 0xF800;
     private static final int THUMB_LITERAL_LOAD = 0x4800;
@@ -71,6 +64,12 @@ final class FirmwareResolver {
     private static final int LIBRARY_NAME_INITIAL = 'l';
 
     final FirmwareProfile profile;
+    private final FirmwareMemory serviceMemory;
+    private final String family;
+    private final int descriptorBytes, descriptorHashOffset;
+    final int ramStart;
+    int ramLimit;
+    private final RomSymbols exports;
     final int romStart;
     private final int bootBytes, maxBytes;
     private static final String SYSTEM = "libsystem.so";
@@ -88,6 +87,7 @@ final class FirmwareResolver {
     private int[] view;
     private int viewBase;
     private boolean cacheReady;
+    private boolean serviceRegionsReady;
     boolean reused;
     int scanPasses;
     int romBytes, systemDescriptor, dlDescriptor, exportCount;
@@ -109,22 +109,57 @@ final class FirmwareResolver {
     }
 
     FirmwareResolver(FirmwareProfile selectedProfile) {
-        if (selectedProfile == null) {
-            throw new IllegalArgumentException("A selected firmware profile is required");
-        }
+        this(selectedProfile, DEFAULT_CAPABILITIES);
+    }
+
+    FirmwareResolver(FirmwareProfile selectedProfile, int capabilities) {
+        this(selectedProfile, null, capabilities);
+    }
+
+    /** A service-only context cannot be passed to NativeSession or resolve(). */
+    FirmwareResolver(FirmwareMemory memory, int capabilities) {
+        this(null, memory, capabilities);
+    }
+
+    private FirmwareResolver(
+            FirmwareProfile selectedProfile, FirmwareMemory memory, int capabilities) {
+        if ((selectedProfile == null) == (memory == null)
+                || (memory != null && (capabilities & ~CAP_AUDIO) != 0))
+            throw new IllegalArgumentException("A launch profile or service memory is required");
         profile = selectedProfile;
+        serviceMemory = memory;
+        requestedCapabilities = capabilities;
+        family = profile != null ? profile.id : memory.familyId;
+        ramStart = profile != null ? profile.ramStart : memory.ramStart;
+        ramLimit = profile != null ? profile.ramLimit : memory.ramLimit;
+        descriptorBytes = profile != null   ? profile.descriptorBytes
+                : memory.libraryDescriptors ? RomSymbols.DESCRIPTOR_BYTES
+                                            : 0;
+        descriptorHashOffset =
+                profile != null ? profile.descriptorHashOffset : RomSymbols.HASH_OFFSET;
+        exports = new RomSymbols(this, descriptorBytes, descriptorHashOffset,
+                profile != null ? profile.descriptorStringsOffset : RomSymbols.STRINGS_OFFSET,
+                profile != null ? profile.descriptorSymbolsOffset : RomSymbols.SYMBOLS_OFFSET);
         RomRanges.prepare();
-        if (profile.descriptorBytes == 0)
+        if ((capabilities & CAP_AUDIO) != 0)
+            AudioBindings.prepare();
+        if ((capabilities & CAP_VIDEO) != 0)
+            VideoBindings.prepare();
+        if ((capabilities & CAP_BATTERY) != 0)
+            BatteryBindings.prepare();
+        if ((capabilities & CAP_BRIDGE) != 0)
+            BridgeBindings.prepare();
+        if (profile != null && descriptorBytes == 0)
             Rm217Bindings.prepare();
-        romStart = profile.romStart;
-        bootBytes = profile.bootBytes;
-        maxBytes = profile.romLimit - romStart;
+        romStart = profile != null ? profile.romStart : memory.romStart;
+        bootBytes = profile != null ? profile.bootBytes : memory.bootBytes;
+        int romLimit = profile != null ? profile.romLimit : memory.romLimit;
+        maxBytes = romLimit - romStart;
         // Signed scan comparisons need an ordered range within one sign half.
-        if ((romStart & 3) != 0 || maxBytes < bootBytes
-                || (romStart < 0) != (profile.romLimit < 0)) {
+        if ((romStart & 3) != 0 || maxBytes < bootBytes || (romStart < 0) != (romLimit < 0)) {
             throw new IllegalArgumentException("Unsupported ROM mapping");
         }
-        patterns = profile.patterns;
+        patterns = profile != null ? profile.patterns : new Pattern[0];
         found = new int[patterns.length];
         matches = new int[patterns.length];
         next = new int[patterns.length];
@@ -159,8 +194,28 @@ final class FirmwareResolver {
                                 && address - secondaryStart <= secondaryBytes - size));
     }
     boolean ram(int address) {
-        return profile.ramRange(address, NativeProtocol.WORD_BYTES);
+        return ram(address, NativeProtocol.WORD_BYTES);
     }
+    boolean ram(int address, int bytes) {
+        return (address & 3) == 0 && ramBytes(address, bytes);
+    }
+    int ramBytes() {
+        return ramLimit - ramStart;
+    }
+    boolean ramBytes(int address, int bytes) {
+        int offset = address - ramStart;
+        return bytes > 0 && offset >= 0 && offset <= ramLimit - ramStart - bytes;
+    }
+    String familyId() {
+        return family;
+    }
+    boolean hasExports() {
+        return descriptorBytes != 0;
+    }
+    boolean serviceOnly() {
+        return serviceMemory != null;
+    }
+
     int word(int address) {
         if ((address & 3) != 0 || !rom(address, 4)) {
             error = ERROR_MEMORY_VIEW;
@@ -171,16 +226,16 @@ final class FirmwareResolver {
     int half(int address) {
         return (word(address & ~3) >>> ((address & 2) * 8)) & 65535;
     }
-    private int octet(int address) {
+    int byteAt(int address) {
         return (word(address & ~3) >>> ((address & 3) * 8)) & 255;
     }
-    private boolean textAt(int address, String text) {
+    boolean textAt(int address, String text) {
         if (!rom(address, text.length() + 1))
             return false;
         for (int i = 0; i < text.length(); i++)
-            if (octet(address + i) != text.charAt(i))
+            if (byteAt(address + i) != text.charAt(i))
                 return false;
-        return octet(address + text.length()) == 0;
+        return byteAt(address + text.length()) == 0;
     }
     boolean patternAt(int index, int address) {
         Pattern p = patterns[index];
@@ -226,17 +281,38 @@ final class FirmwareResolver {
         target = (second & THUMB_OPCODE_MASK) == THUMB_EXCHANGE_SUFFIX ? target & ~3 : target | 1;
         // Stock ARM interworking veneers are LDR pc,[pc,#-4]; .word target.
         for (int depth = 0; depth < MAX_VENEER_DEPTH; depth++) {
-            if (!rom(target & ~1, 8)) {
+            if (((target & 1) == 0 && (target & 3) != 0) || !rom(target & ~1, 8)) {
                 error = ERROR_THUMB_CALL;
                 return 0;
             }
-            if ((target & 3) != 0 || word(target) != ARM_LITERAL_JUMP)
+            int entry = target & ~1;
+            if ((target & 1) != 0 && (entry & 3) == 0 && rom(entry, 12) && word(entry) == 0x46C04778
+                    && word(entry + 4) == ARM_LITERAL_JUMP) {
+                target = word(entry + 8);
+            } else if ((target & 3) == 0 && word(target) == ARM_LITERAL_JUMP) {
+                target = word(target + 4);
+            } else {
                 return target;
-            target = word(target + 4);
+            }
         }
         error = ERROR_THUMB_CALL;
         return 0;
     }
+    /** Decode an unconditional Thumb B; returns its even instruction address. */
+    int thumbBranch(int address) {
+        int instruction = half(address);
+        if ((address & 1) != 0 || (instruction & THUMB_OPCODE_MASK) != THUMB_BRANCH) {
+            error = ERROR_THUMB_BRANCH;
+            return 0;
+        }
+        int target = address + THUMB_PC_BIAS + ((instruction << 21) >> 20);
+        if (!rom(target, 2)) {
+            error = ERROR_THUMB_BRANCH;
+            return 0;
+        }
+        return target;
+    }
+
     int armBranch(int address) {
         int instruction = word(address);
         if ((instruction & ARM_BRANCH_MASK) != ARM_BRANCH) {
@@ -245,6 +321,86 @@ final class FirmwareResolver {
         }
         return address + ARM_PC_BIAS + ((instruction << 8) >> 6);
     }
+    /** Optional services share core discovery's bounds and instruction decoders. */
+    boolean matches(int address, RomRecipe recipe) {
+        if (recipe == null || (address & (recipe.alignment - 1)) != 0 || !rom(address, recipe.size))
+            return false;
+        for (int i = 0; i < recipe.words.length; i++)
+            if ((half(address + 2 * i) & recipe.masks[i]) != recipe.words[i])
+                return false;
+        return error == 0;
+    }
+
+    /** Search only one already-validated ROM region; ambiguity is unavailable. */
+    int findUnique(RomRecipe recipe, int start, int bytes) {
+        if (recipe == null || !rom(start, bytes) || bytes < recipe.size
+                || (recipe.alignment != 2 && recipe.alignment != 4) || recipe.anchorOffset < 0
+                || (recipe.anchorOffset & 1) != 0 || recipe.anchorOffset > recipe.size - 4)
+            return 0;
+        int result = 0;
+        int offset = (-start) & (recipe.alignment - 1);
+        for (; offset <= bytes - recipe.size; offset += recipe.alignment) {
+            int address = start + offset, anchor = address + recipe.anchorOffset;
+            // The candidate span is checked above. Keep the scan's common path
+            // as direct array reads, as in the core recipe scanner.
+            int index = ((anchor & ~3) - viewBase) >>> 2;
+            int value = view[index];
+            if ((anchor & 2) != 0)
+                value = (value >>> 16) | (view[index + 1] << 16);
+            if (value == recipe.anchor && matches(address, recipe)) {
+                if (result != 0)
+                    return 0;
+                result = address;
+            }
+        }
+        return result;
+    }
+
+    /** Shared optional batch scanner; no interface calls for unmatched anchors. */
+    void scan(RomSearch search, int start, int bytes) {
+        if (!rom(start, bytes) || (start & 3) != 0 || (bytes & 3) != 0) {
+            error = ERROR_MEMORY_VIEW;
+            return;
+        }
+        int index = (start - viewBase) >>> 2;
+        int limit = index + (bytes >>> 2);
+        int[] heads = search.heads;
+        for (int i = index; i < limit; i++) {
+            int word = view[i], address = start + ((i - index) << 2);
+            if (heads[word & 255] != 0)
+                search.candidate(this, address, word);
+            if (i + 1 < limit) {
+                int shifted = (word >>> 16) | (view[i + 1] << 16);
+                if (heads[shifted & 255] != 0)
+                    search.candidate(this, address + 2, shifted);
+            }
+        }
+        scanned += bytes;
+        scanPasses++;
+    }
+
+    /** Decode a PC-relative ARM LDR of the expected destination register. */
+    int armLiteral(int address, int register) {
+        int instruction = word(address);
+        if (register < 0 || register > 15
+                || (instruction & 0xFF7FF000) != (0xE51F0000 | (register << 12))) {
+            error = ERROR_LITERAL_LOAD;
+            return 0;
+        }
+        int displacement = instruction & 4095;
+        int slot = address + ARM_PC_BIAS
+                + ((instruction & 0x00800000) != 0 ? displacement : -displacement);
+        return word(slot);
+    }
+
+    int export(String name) {
+        return systemDescriptor == 0 ? 0 : symbol(systemDescriptor, name);
+    }
+
+    int exportObject(String name) {
+        return systemDescriptor == 0 ? 0 : symbol(systemDescriptor, name, RomSymbols.OBJECT);
+    }
+
     boolean fail(int code, int which) {
         error = code;
         detail = which;
@@ -256,6 +412,9 @@ final class FirmwareResolver {
      * Only reads firmware. All state needed during the scan was preallocated.
      */
     boolean resolve(int[] source, int origin) {
+        clearBindings(0, api.length);
+        if (profile == null)
+            return fail(ERROR_ABI, 0);
         view = source;
         viewBase = origin;
         reused = false;
@@ -264,6 +423,7 @@ final class FirmwareResolver {
         error = 0;
         detail = 0;
         phase = PHASE_BOUNDS;
+        boolean valid = false;
         try {
             if ((origin & 3) != 0 || !viewContains(bootBytes))
                 return fail(ERROR_MEMORY_VIEW, 0);
@@ -272,6 +432,8 @@ final class FirmwareResolver {
                 if (revalidate()) {
                     cacheReady = true;
                     reused = true;
+                    resolveOptional();
+                    valid = true;
                     return true;
                 }
             }
@@ -279,8 +441,149 @@ final class FirmwareResolver {
             if (!discover())
                 return false;
             cacheReady = true;
+            resolveOptional();
+            valid = true;
             return true;
         } finally {
+            if (!valid)
+                clearBindings(0, api.length);
+            view = null;
+            viewBase = 0;
+        }
+    }
+
+    /** A missing optional capability never changes a validated core result. */
+    private void resolveOptional() {
+        resolveOptional(CAP_AUDIO, FirmwareApi.AUDIO_FIRST, FirmwareApi.AUDIO_LIMIT);
+        resolveOptional(CAP_VIDEO, FirmwareApi.VIDEO_FIRST, FirmwareApi.VIDEO_LIMIT);
+        resolveOptional(CAP_BATTERY, FirmwareApi.BATTERY_FIRST, FirmwareApi.BATTERY_LIMIT);
+        resolveOptional(CAP_BRIDGE, FirmwareApi.BRIDGE_FIRST, FirmwareApi.BRIDGE_LIMIT);
+    }
+
+    private void resolveOptional(int capability, int first, int limit) {
+        clearBindings(first, limit);
+        if ((requestedCapabilities & capability) == 0)
+            return;
+        int savedError = error, savedDetail = detail, savedPhase = phase;
+        boolean valid = false;
+        switch (capability) {
+            case CAP_AUDIO:
+                valid = AudioBindings.bind(this);
+                break;
+            case CAP_VIDEO:
+                valid = VideoBindings.bind(this);
+                break;
+            case CAP_BATTERY:
+                valid = BatteryBindings.bind(this);
+                break;
+            case CAP_BRIDGE:
+                valid = BridgeBindings.bind(this);
+                break;
+        }
+        if (!valid || error != 0)
+            clearBindings(first, limit);
+        error = savedError;
+        detail = savedDetail;
+        phase = savedPhase;
+    }
+
+    private void clearBindings(int first, int limit) {
+        for (int i = first; i < limit; i++)
+            api[i] = 0;
+    }
+
+    /** Publish discovered service regions only within their conservative windows. */
+    boolean setRomRegions(int firstBytes, int secondBytes) {
+        if (serviceMemory == null || firstBytes < bootBytes || firstBytes > maxBytes
+                || (firstBytes & 3) != 0 || secondBytes < 0 || (secondBytes & 3) != 0
+                || (secondBytes != 0
+                        && (serviceMemory.secondaryStart == 0
+                                || secondBytes > serviceMemory.secondaryLimit
+                                                - serviceMemory.secondaryStart))
+                || !viewContains(romStart, firstBytes)
+                || (secondBytes != 0 && !viewContains(serviceMemory.secondaryStart, secondBytes)))
+            return fail(ERROR_ROM_BOUNDS, 0);
+        romBytes = firstBytes;
+        secondaryStart = serviceMemory.secondaryStart;
+        secondaryBytes = secondBytes;
+        serviceRegionsReady = true;
+        return true;
+    }
+
+    boolean setRamLimit(int limit) {
+        if (serviceMemory == null || (limit & 3) != 0 || limit - ramStart <= 0
+                || limit - ramStart > serviceMemory.ramLimit - ramStart)
+            return fail(ERROR_ROM_BOUNDS, 0);
+        ramLimit = limit;
+        return true;
+    }
+
+    /** Discover optional services for a separately bootstrapped native port. */
+    boolean resolveServices(int[] source, int origin) {
+        clearBindings(0, api.length);
+        if (serviceMemory == null)
+            return fail(ERROR_ABI, 0);
+        view = source;
+        viewBase = origin;
+        reused = false;
+        scanned = scanPasses = error = detail = 0;
+        phase = PHASE_BOUNDS;
+        int oldBytes = romBytes, oldSecond = secondaryStart, oldSecondBytes = secondaryBytes;
+        boolean valid = false;
+        try {
+            romBytes = bootBytes;
+            secondaryBytes = 0;
+            serviceRegionsReady = false;
+            ramLimit = serviceMemory.ramLimit;
+            if ((origin & 3) != 0 || !viewContains(bootBytes) || !serviceMemory.discover(this)
+                    || !serviceRegionsReady || error != 0) {
+                cacheReady = false;
+                return fail(ERROR_ROM_BOUNDS, 0);
+            }
+            boolean same = cacheReady && oldBytes == romBytes && oldSecond == secondaryStart
+                    && oldSecondBytes == secondaryBytes;
+            if (hasExports()) {
+                if (same && rom(systemDescriptor, descriptorBytes)
+                        && textAt(word(systemDescriptor), SYSTEM)
+                        && descriptorAt(systemDescriptor)) {
+                    reused = true;
+                } else {
+                    error = 0;
+                    systemMatches = dlMatches = systemDescriptor = dlDescriptor = 0;
+                    scanStart = romStart;
+                    scanBytes = romBytes;
+                    ++scanPasses;
+                    scanRom();
+                    if (secondaryBytes != 0 && error == 0) {
+                        scanStart = secondaryStart;
+                        scanBytes = secondaryBytes;
+                        ++scanPasses;
+                        scanRom();
+                    }
+                    if (systemMatches != 1 || error != 0) {
+                        cacheReady = false;
+                        return fail(ERROR_DESCRIPTOR_COUNT, 0);
+                    }
+                }
+                exportCount = word(word(systemDescriptor + descriptorHashOffset) + 4) - 1;
+                for (int i = 0; i < FirmwareApi.EXPORT_COUNT; i++) {
+                    api[i] = export(imports[i]);
+                    if (error != 0) {
+                        cacheReady = false;
+                        return fail(ERROR_IMPORT, i);
+                    }
+                }
+            } else {
+                reused = same;
+            }
+            cacheReady = true;
+            phase = PHASE_READY;
+            resolveOptional();
+            valid = true;
+            return true;
+        } finally {
+            if (!valid)
+                clearBindings(0, api.length);
             view = null;
             viewBase = 0;
         }
@@ -432,7 +735,7 @@ final class FirmwareResolver {
             // made about the five currently-zero descriptor fields.
             // Both bounds are in the same negative-int ROM window, so signed
             // comparisons are sufficient. Reconstruct addresses only on hits.
-            if (profile.descriptorBytes != 0 && previous >= namesStart && previous < namesEnd
+            if (descriptorBytes != 0 && previous >= namesStart && previous < namesEnd
                     && ((data[(previous - origin) >>> 2] >>> ((previous & 3) << 3)) & 255)
                             == LIBRARY_NAME_INITIAL)
                 descriptorCandidate(origin + ((index - 1) << 2), previous);
@@ -454,7 +757,7 @@ final class FirmwareResolver {
     }
 
     private void descriptorCandidate(int address, int name) {
-        if (!rom(address, profile.descriptorBytes))
+        if (!rom(address, descriptorBytes))
             return;
         if (textAt(name, SYSTEM) && descriptorAt(address)) {
             systemDescriptor = address;
@@ -474,11 +777,9 @@ final class FirmwareResolver {
             detail = 0;
             return true;
         }
-        exportCount = word(word(systemDescriptor + profile.descriptorHashOffset)
-                              + ELF_HASH_CHAIN_COUNT_OFFSET)
-                - 1;
+        exportCount = word(word(systemDescriptor + profile.descriptorHashOffset) + 4) - 1;
         phase = PHASE_IMPORTS;
-        for (int i = 0; i < api.length; i++) {
+        for (int i = 0; i < FirmwareApi.REQUIRED_COUNT; i++) {
             if (imports[i].length() == 0)
                 continue;
             detail = i;
@@ -608,7 +909,7 @@ final class FirmwareResolver {
             return fail(ERROR_ABI, ABI_APP_GLOBAL);
         if (error != 0)
             return false;
-        for (int i = 0; i < api.length; i++)
+        for (int i = 0; i < FirmwareApi.REQUIRED_COUNT; i++)
             if (api[i] == 0)
                 return fail(ERROR_UNBOUND_API, i);
         phase = PHASE_READY;
@@ -648,67 +949,30 @@ final class FirmwareResolver {
                 && error == 0;
     }
 
+    public boolean containsRom(int address, int bytes) {
+        return rom(address, bytes);
+    }
+
+    public int readWord(int address) {
+        return word(address);
+    }
+
+    public boolean matchesText(int address, String text) {
+        return textAt(address, text);
+    }
+
     private boolean descriptorAt(int address) {
-        int hash = word(address + profile.descriptorHashOffset),
-            strings = word(address + profile.descriptorStringsOffset),
-            symbols = word(address + profile.descriptorSymbolsOffset);
-        if ((hash & 3) != 0 || (symbols & 3) != 0 || !rom(hash, ELF_HASH_HEADER_BYTES)
-                || !rom(strings, 1))
-            return false;
-        int buckets = word(hash), count = word(hash + ELF_HASH_CHAIN_COUNT_OFFSET);
-        if (buckets < 1 || buckets > MAX_HASH_ENTRIES || count < 2 || count > MAX_HASH_ENTRIES
-                || !rom(hash, ELF_HASH_HEADER_BYTES + 4 * (buckets + count))
-                || !rom(symbols, ELF_SYMBOL_BYTES * count))
-            return false;
-        for (int i = 0; i < buckets + count; i++) {
-            int index = word(hash + ELF_HASH_HEADER_BYTES + 4 * i);
-            if (index < 0 || index >= count)
-                return false;
-        }
-        for (int i = 1; i < count; i++) {
-            int record = symbols + ELF_SYMBOL_BYTES * i, offset = word(record),
-                value = word(record + ELF_SYMBOL_VALUE_OFFSET),
-                type = word(record + ELF_SYMBOL_TYPE_OFFSET);
-            if (offset < 0 || offset >= romBytes || !rom(strings + offset, 1)
-                    || (type != ELF_ABSOLUTE_FUNCTION && type != ELF_ABSOLUTE_OBJECT))
-                return false;
-            if ((type & 255) == ELF_FUNCTION_INFO && !rom(value & ~1, 2))
-                return false;
-        }
-        return error == 0;
+        return exports.validate(address, romBytes, true) && error == 0;
     }
 
     private int symbol(int descriptor, String name) {
-        int hash = word(descriptor + profile.descriptorHashOffset),
-            strings = word(descriptor + profile.descriptorStringsOffset),
-            symbols = word(descriptor + profile.descriptorSymbolsOffset);
-        int buckets = word(hash), count = word(hash + ELF_HASH_CHAIN_COUNT_OFFSET), h = 0;
-        for (int i = 0; i < name.length(); i++) {
-            h = (h << 4) + name.charAt(i);
-            int high = h & SYSV_HASH_HIGH_BITS;
-            h ^= high >>> 24;
-            h &= ~high;
-        }
-        int index = word(hash + ELF_HASH_HEADER_BYTES + 4 * (h % buckets)), result = 0, steps = 0;
-        while (index != 0) {
-            if (index < 0 || index >= count || ++steps >= count) {
-                error = ERROR_SYMBOL_CHAIN;
-                return 0;
-            }
-            int record = symbols + ELF_SYMBOL_BYTES * index;
-            if (textAt(strings + word(record), name)) {
-                if (result != 0 || word(record + ELF_SYMBOL_TYPE_OFFSET) != ELF_ABSOLUTE_FUNCTION) {
-                    error = ERROR_SYMBOL_CHAIN;
-                    return 0;
-                }
-                result = word(record + ELF_SYMBOL_VALUE_OFFSET);
-                if ((result & 1) == 0 && (result & 3) != 0) {
-                    error = ERROR_SYMBOL_CHAIN;
-                    return 0;
-                }
-            }
-            index = word(hash + ELF_HASH_HEADER_BYTES + 4 * (buckets + index));
-        }
+        return symbol(descriptor, name, RomSymbols.FUNCTION);
+    }
+
+    private int symbol(int descriptor, String name, int expectedType) {
+        int result = exports.find(descriptor, name, expectedType, romBytes, true);
+        if (exports.malformed)
+            error = ERROR_SYMBOL_CHAIN;
         return result;
     }
 

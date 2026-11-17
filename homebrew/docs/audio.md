@@ -55,9 +55,13 @@ The shared runtime closes automatically before releasing application memory.
 from launcher support. An audio binding alone does not provide the rest of the
 runtime for a phone.
 
-Shared-launcher applications call `s40_audio_bind_device()`. Standalone ports may
-use `s40_audio_bind_firmware()` with their resolved native clock and the required
-heap, time and message-pump services. The explicit RM-839 02.33 adapter remains
-available for the existing Quake integration. The public header documents these
-entry points; private integration requirements are in
-[src/native/audio/commgr/runtime_services.h](../src/native/audio/commgr/runtime_services.h).
+Shared-launcher applications call `s40_audio_bind_device()` to use the complete
+audio capability supplied by discovery. It does not scan firmware or select a
+firmware version.
+
+Standalone ports supply their own bootstrap, native heap/time services and
+application-task message pump. They can use the shared service-only resolver
+context and transport, or explicitly bind an `s40_audio_driver`. See the public
+audio header for driver lifetime and
+[runtime_services.h](../src/native/audio/commgr/runtime_services.h) for the
+transport's integration boundary.

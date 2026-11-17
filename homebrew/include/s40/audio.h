@@ -34,16 +34,8 @@ typedef struct {
 } s40_audio_driver;
 void s40_audio_bind(const s40_audio_driver* driver);
 
-/* Select a built-in exact-firmware adapter after checking the current profile
- * and ROM bindings. Closes the previous stream; 1 available, 0 unsupported. */
+/* Bind the audio services discovered by the launcher. Closes the previous
+ * stream; 1 available, 0 unsupported. No firmware scan occurs here. */
 int s40_audio_bind_device(void);
 
-/* Standalone ports supply the actual resolved native clock entry, including
- * its ARM/Thumb bit. All adapter entry fingerprints must also match. This
- * selects bindings only: the port must link native heap/time imports, the
- * application-task message pump, and close audio before unloading its code. */
-int s40_audio_bind_firmware(uintptr_t discovered_clock);
-
-/* Exact firmware adapter, linked explicitly by RM-839 02.33 ports. */
-extern const s40_audio_driver s40_audio_rm839_0233;
 #endif

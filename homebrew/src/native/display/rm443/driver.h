@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* Private RM-443 10.12 adapter. No clock or bus timing changes. */
+/* Private resolver-bound RM-443 adapter. No clock or bus timing changes. */
 #ifndef S40_VIDEO_RM443_H
 #define S40_VIDEO_RM443_H
 #include <stdint.h>
@@ -10,11 +10,7 @@ int s40_rm443_video_foreground(void);
 int s40_rm443_video_keyboard(uintptr_t message);
 /* Pending bits: internal queue1, subscriptions2, display-lock waiters4.
  * Zero means idle; -1 means unsupported task/resource context. */
-enum {
-    RM443_SERVICE_QUEUE = 1,
-    RM443_SERVICE_SUBSCRIPTIONS = 2,
-    RM443_SERVICE_DISPLAY_WAITER = 4
-};
+enum { RM443_SERVICE_QUEUE = 1, RM443_SERVICE_SUBSCRIPTIONS = 2, RM443_SERVICE_DISPLAY_WAITER = 4 };
 int s40_rm443_video_services_pending(void);
 int s40_rm443_video_backlight(unsigned seconds, int default_period);
 

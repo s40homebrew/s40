@@ -2,7 +2,7 @@
 #include "s40/runtime.h"
 #include "core/time.h"
 #include "video_internal.h"
-#include "display/rm443_1012/driver.h"
+#include "display/rm443/driver.h"
 
 static unsigned enabled;
 static uint32_t next_refresh;

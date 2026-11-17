@@ -18,4 +18,6 @@ mkdir -p "$BUILD_DIR/host-check"
 "$JAVA8_HOME/bin/java" -cp "$BUILD_DIR/host-check:$BUILD_DIR/preverified:$SDK_CLASSES" CheckStagePlacement "$BUILD_DIR/native.bin"
 "$JAVA8_HOME/bin/java" -cp "$BUILD_DIR/preverified:$BUILD_DIR/host-check" CheckProfiles
 "$JAVA8_HOME/bin/java" -cp "$BUILD_DIR/preverified:$BUILD_DIR/host-check" CheckSharedDiscovery
+"$JAVA8_HOME/bin/java" -cp "$BUILD_DIR/preverified:$BUILD_DIR/host-check" CheckRomServices
+"$JAVA8_HOME/bin/java" -cp "$BUILD_DIR/preverified:$BUILD_DIR/host-check" CheckAudioMemory
 "$JAVA8_HOME/bin/java" -cp "$BUILD_DIR/host-check:$BUILD_DIR/preverified:$SDK_CLASSES" CheckLaunchProgress

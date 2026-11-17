@@ -7,6 +7,7 @@ It does NOT establish real panel compatibility or peripheral timing.
 """
 
 import os
+import re
 import struct
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ from unicorn.arm_const import *
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = None
+DEFINES = {}
 REGS = [UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3]
 SAVED = [
     UC_ARM_REG_R4,
@@ -58,6 +60,56 @@ TARGETS = [
     0xF0B9B868,
     0xF0B9CBC8,
 ]
+
+
+# Synthetic descriptor addresses refer to this test's explicit emulator stubs.
+VIDEO_BINDINGS = {
+    "ABI": 0x1,
+    "LCD_GATE": 0xF0250A39,
+    "DISPLAY_HOOKS": 0xD8071B78,
+    "LCD_PENDING": 0xD80BD178,
+    "LCD_SET_COMPLETION": 0xF0254171,
+    "LCD_PUBLIC_COMPLETE": 0xF0254193,
+    "LCD_CONTROL": 0xFFD22208,
+    "GPIO": 0xFFD31C00,
+    "LCD_STATE": 0xD80BCC18,
+    "IRQ_LOCK": 0xF02A3235,
+    "IRQ_UNLOCK": 0xF02A322D,
+    "CLOCK_ENABLE": 0xF037CCFF,
+    "CLOCK_RESET": 0xF037CD91,
+    "GPIO_PIN_MODE": 0xF02A30EB,
+    "LCD_COMMAND": 0xF0250841,
+    "LCD_WRITE_BYTES": 0xF02507A5,
+    "LCD_WINDOW": 0xF025106B,
+    "LCD_ARM": 0xF0250939,
+    "DMA_START": 0xF037BF6B,
+    "WATCHDOG_START": 0xF037AD87,
+    "LCD_DMA_COMPLETE": 0xF025385D,
+    "LCD_TIMEOUT": 0xF0253847,
+    "LCD_READ_BYTE": 0xF0250869,
+    "LCD_ABORT": 0xF025087F,
+    "LCD_READ_WORD": 0xF02509E7,
+    "TIMER_START": 0xF0316A95,
+    "TIMER_STOP": 0xF0316BFF,
+    "PERIODIC_TIMER_ID": 0x103,
+    "PERIODIC_TIMER_STATE": 0xD80C33E2,
+    "SCRATCHPAD_TAKE": 0xF0D4A745,
+    "SCRATCHPAD_GIVE": 0xF0D4A761,
+    "SCRATCHPAD_RESOURCES": 0xD803B25B,
+    "OS_RESOURCES": 0xD80C57DC,
+    "RESOURCE_COUNT": 0xB2,
+    "RAM_START": 0xD8000000,
+    "RAM_END": 0xDA000000,
+    "JAVA_TASK_ID": 0x10,
+    "JAVA_TASK_SLOT": 0xD80CD3AC,
+    "JAVA_TASK_DESCRIPTOR": 0xF1120C34,
+    "JAVA_QUEUE": 0xD80CF2E4,
+    "FOREGROUND_SLOT": 0xD8176954,
+    "KEYBOARD_DECODE": 0xF0CFE4BB,
+    "JAVA_SERVER": 0xD8176D88,
+    "ISI_DELETE": 0xF0B9B869,
+    "CM_SEND_SERVER": 0xF0B9CBC9,
+}
 
 
 class Model:
@@ -117,18 +169,6 @@ class Model:
         # Model only the documented memory contracts; no private firmware input.
         self.u.mem_map(0xF0100000, 0x1000000)
         self.u.mem_map(0xF1120000, 4096)
-        for a, v in [
-            (0xF0253928, 0xB5FE),
-            (0xF025385C, 0xB570),
-            (0xF037BF6A, 0xB5FF),
-            (0xF0250938, 0xB5F8),
-            (0xF0254170, 0x4AF8),
-            (0xF02509E6, 0x490B),
-        ]:
-            self.u.mem_write(a, struct.pack("<H", v))
-        self.bypass_identity = True
-        self.identity = self.symbols["s40_rm443_video_supported"]
-        self.u.hook_add(UC_HOOK_CODE, self.hook, begin=self.identity, end=self.identity)
         self.allocator = self.symbols["fw_os_block_alloc_no_wait"]
         self.allocate_ok = True
         self.light_messages = []
@@ -179,16 +219,12 @@ class Model:
         assert allowed, ("unexpected write", hex(a), n)
 
     def hook(self, u, a, size, user):
-        if a == self.identity and not self.bypass_identity:
-            return
         assert u.reg_read(UC_ARM_REG_SP) % 8 == 0, ("unaligned external call", hex(a))
         v = [u.reg_read(r) for r in REGS]
         self.events.append((hex(a), v))
         ret = 1
         tail = None
-        if a == self.identity:
-            ret = 1
-        elif a == self.allocator:
+        if a == self.allocator:
             assert v[0] == 24
             ret = RESULT + 0x200 if self.allocate_ok else 0
         elif a == 0xF0B9CBC8:
@@ -492,22 +528,63 @@ def exercise_te_null():
     return {"case": "te_null_timestamp_rejected_without_firmware_calls", "pass": True}
 
 
-def check_identity():
+def check_capability():
     m = Model()
-    m.bypass_identity = False
-    m.u.mem_unmap(0xF0100000, 0x1000000)
-    assert m.call("s40_rm443_video_supported") == 0
-    m.u.mem_map(0xF0100000, 0x1000000)
     descriptor = m.r32(m.symbols["s40_result"])
-    # The matching descriptor alone cannot enable the driver on a different ROM.
-    for word, value in [(1122, 0xF02D500B), (87, 240), (88, 320), (89, 488), (85, 0), (95, 0)]:
-        m.w32(descriptor + word * 4, value)
+    # Native use trusts a complete resolver-published capability and never scans
+    # ROM again. Removing all callable mappings must not affect this check.
+    m.u.mem_unmap(0xF0100000, 0x1000000)
+    assert m.call("s40_rm443_video_supported") == 1
+
+    def bind(name, value):
+        m.w32(descriptor + 4 * (DEFINES["FW_API_DESCRIPTOR"] + DEFINES[name]), value)
+
+    bind("API_VIDEO_ABI", 0)
     assert m.call("s40_rm443_video_supported") == 0
-    # RM-443 uses master display, so a zero UI-refresh callback must pass the
-    # profile gate and reach ROM validation (the synthetic ROM then fails).
-    reason = m.call("s40_rm443_video_support_reason")
-    assert bytes(m.u.mem_read(reason, 25)).split(b"\0", 1)[0] == b"ROM fingerprint mismatch"
+    bind("API_VIDEO_ABI", DEFINES["FW_VIDEO_ABI_RM443"])
+    bind("API_VIDEO_LCD_COMMAND", 0)
+    assert m.call("s40_rm443_video_supported") == 0
     assert not m.events and m.outer == m.gate == m.dma_arms == 0
+
+
+def check_resolved_globals():
+    m = Model()
+    descriptor = m.r32(m.symbols["s40_result"])
+
+    def bind(name, value):
+        m.w32(descriptor + 4 * (DEFINES["FW_API_DESCRIPTOR"] + DEFINES["API_VIDEO_" + name]), value)
+
+    # Move every service/foreground object away from the ordinary fixture. This
+    # catches an accidentally retained native address or task/resource constant.
+    for name, value in {
+        "FOREGROUND_SLOT": 0xD8180100,
+        "JAVA_TASK_ID": 37,
+        "JAVA_TASK_SLOT": 0xD8180500,
+        "JAVA_TASK_DESCRIPTOR": 0xF1120800,
+        "JAVA_QUEUE": 0xD8180600,
+        "SCRATCHPAD_RESOURCES": 0xD8180401,
+        "OS_RESOURCES": 0xD8181000,
+        "RESOURCE_COUNT": 5,
+    }.items():
+        bind(name, value)
+    m.w32(0xD8180100, 0xD8180200)
+    m.w32(0xD8180214, 3)
+    assert m.call("s40_rm443_video_foreground") == 1
+    # A plausible pointer outside the resolver's current RAM window is not a
+    # foreground object, even when the emulated address happens to be mapped.
+    bind("RAM_END", 0xD8180214)
+    assert m.call("s40_rm443_video_foreground") == 0
+    bind("RAM_END", 0xDA000000)
+    m.w32(descriptor + 24, 37)
+    m.w32(0xD8180500, 0xF1120800)
+    m.w32(0xF1120800, 0xD8180600)
+    m.u.mem_write(0xD8180402, b"\x03")
+    m.w32(0xD8181018, 0xFFFFFFFF)
+    assert m.call("s40_rm443_video_services_pending") == 0
+    m.w32(0xD8181018, 0xDEADBEEF)
+    assert m.call("s40_rm443_video_services_pending") == 4
+    m.u.mem_write(0xD8180402, b"\x05")
+    assert m.call("s40_rm443_video_services_pending") == 0xFFFFFFFF
 
 
 def check_keyboard_and_focus():
@@ -593,7 +670,8 @@ def check_services_and_light():
 
 
 def run():
-    check_identity()
+    check_capability()
+    check_resolved_globals()
     check_keyboard_and_focus()
     check_services_and_light()
     cases = (
@@ -617,7 +695,7 @@ def run():
         ]
     )
     print(
-        "RM-443 video: identity rejection and %d ARM ownership/format/timeout checks passed."
+        "RM-443 video: capability rejection and %d ARM ownership/format/timeout checks passed."
         % len(cases)
     )
 
@@ -627,9 +705,27 @@ if __name__ == "__main__":
         BUILD = Path(folder)
         subprocess.run(["python3", str(ROOT / "tools/gen_imports.py"), str(BUILD)], check=True)
         fixture = BUILD / "fixture.c"
+        DEFINES = {
+            name: int(value, 0)
+            for name, value in re.findall(
+                r"^#define (\w+) (0x[0-9a-fA-F]+|[0-9]+)$",
+                (BUILD / "firmware_api.h").read_text(),
+                re.M,
+            )
+        }
         fixture.write_text(
-            "#include <stdint.h>\nuint32_t descriptor[1200];\nuint32_t *s40_result=descriptor;\n"
+            '#include <stdint.h>\n#include "firmware_api.h"\n'
+            "uint32_t descriptor[2048] = {\n"
+            "[FW_DISPLAY_WIDTH_WORD]=240, [FW_DISPLAY_HEIGHT_WORD]=320,\n"
+            "[FW_CANVAS_LAYOUT_WORD]=FW_CANVAS_CURRENT,\n"
+            + "".join(
+                "[FW_API_DESCRIPTOR+API_VIDEO_%s]=0x%x,\n" % (name, value)
+                for name, value in VIDEO_BINDINGS.items()
+            )
+            + "};\nuint32_t *s40_result=descriptor;\n"
             "void* fw_os_block_alloc_no_wait(unsigned n) {(void)n; return 0;}\n"
+            "uint32_t fw_os_current_time_read_in_ms(void) {"
+            "return ((uint32_t (*)(void))0xf02d500b)();}\n"
         )
         cc = os.environ.get("CC", "clang")
         ld = os.environ.get("LD", "ld.lld")
@@ -647,7 +743,7 @@ if __name__ == "__main__":
             "-I" + str(BUILD),
         ]
         for src, out in [
-            (ROOT / "src/native/display/rm443_1012/driver.c", BUILD / "video.o"),
+            (ROOT / "src/native/display/rm443/driver.c", BUILD / "video.o"),
             (fixture, BUILD / "fixture.o"),
         ]:
             subprocess.run([cc, *flags, "-c", str(src), "-o", str(out)], check=True)

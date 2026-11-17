@@ -1,6 +1,7 @@
 # Battery Info
 
-A Java ME battery dashboard for Nokia 6303 classic / RM-443 firmware 10.12.
+A Java ME battery dashboard for Nokia 6303 classic / RM-443. See
+[device compatibility](../../docs/devices.md) for available firmware support.
 Build from the repository root:
 
 ```sh
@@ -24,6 +25,6 @@ unavailable; voltage, charger state, nominal capacity and bars remain usable.
 The app does not substitute a voltage-based or per-bar percentage.
 
 The app only reads battery information; it does not change charging controls.
-Its firmware-specific adapter is in `native/battery.c`.
+It uses the SDK's shared firmware discovery.
 
 Original app code is MIT licensed under `homebrew/COPYING`.

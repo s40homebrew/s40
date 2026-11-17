@@ -9,7 +9,7 @@
 #include "firmware/message.h"
 #include "s40/runtime.h"
 #include "video_internal.h"
-#include "display/rm443_1012/driver.h"
+#include "display/rm443/driver.h"
 
 static uint16_t *source, *packed[2];
 static unsigned source_width, source_height, screen_width, screen_height;

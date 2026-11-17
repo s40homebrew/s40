@@ -31,13 +31,10 @@ public final class BatteryInfo extends MIDlet implements CommandListener, Runnab
         } catch (SecurityException unavailable) {
         }
         FirmwareProfile profile = FirmwareProfiles.select(platform);
-        int slash = platform == null ? -1 : platform.indexOf('/');
-        String version = slash < 0 ? "" : platform.substring(slash + 1).trim();
-        if (profile == null || !"RM-443".equals(profile.id)
-                || !(version.equals("10.12") || version.startsWith("10.12 "))) {
-            message = "Requires Nokia 6303 classic with firmware 10.12.";
+        if (profile == null) {
+            message = "No native launcher is available for this phone.";
         } else {
-            session = new NativeSession(profile, "/application.bin");
+            session = new NativeSession(profile, "/application.bin", FirmwareResolver.CAP_BATTERY);
             screen.addCommand(refresh);
         }
         Display.getDisplay(this).setCurrent(screen);
@@ -82,7 +79,7 @@ public final class BatteryInfo extends MIDlet implements CommandListener, Runnab
                 reading = new Reading(result);
                 message = null;
             } else if (session.error == 41) {
-                message = "Battery API does not match firmware 10.12.";
+                message = "Battery information is unavailable on this firmware.";
             } else if (session.error == 42) {
                 message = "Battery estimate is not ready. Try Refresh again shortly.";
             } else {

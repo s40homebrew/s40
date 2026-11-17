@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT */
-/* RM-443 10.12 RGB565 transport. Keeps the stock DMA cache/IRQ/watchdog
+/* Resolver-bound RM-443 RGB565 transport. Keeps the stock DMA cache/IRQ/watchdog
  * and completion ownership. The generic video layer owns source buffers and
  * restores ordinary output before unrelated firmware message handling.
  */
@@ -7,12 +7,11 @@
 
 #include <stddef.h>
 
-#include "firmware/bindings.h"
-#include "firmware/guard.h"
-#include "firmware/message.h"
-#include "s40/runtime.h"
 #include "bindings.h"
+#include "firmware/bindings.h"
+#include "firmware/message.h"
 #include "layout.h"
+#include "s40/runtime.h"
 
 #define BARRIER() __asm__ volatile("" ::: "memory")
 
@@ -28,32 +27,21 @@ static const char* support_reason = "unprobed firmware";
 const char* s40_rm443_video_support_reason(void) { return support_reason; }
 
 __attribute__((noinline)) int s40_rm443_video_supported(void) {
-    /* Check discovered identity before reading any device-specific address.
-     * Other RM-443 firmware and other profiles keep the generic display path.
-     * Fingerprints cover 32 bytes at every used ROM entry, including keyboard
-     * routing and the stock completion wrapper. No firmware image is shipped.
-     */
-    support_reason = "unsupported firmware clock binding";
-    if (!s40_result || s40_result[FW_API_DESCRIPTOR + API_FW_OS_CURRENT_TIME_READ_IN_MS] !=
-                               (RM443_ROM_milliseconds | 1u))
+    /* Capability publication is transactional: an unsupported or incomplete
+     * instruction graph leaves the whole optional group zero. No native ROM
+     * scan or firmware-version gate duplicates the shared resolver. */
+    support_reason = "RGB565 capability unavailable";
+    if (!s40_result || RM443_BINDING(ABI) != FW_VIDEO_ABI_RM443)
         return 0;
     support_reason = "unsupported display profile";
     if (s40_result[FW_DISPLAY_WIDTH_WORD] != RM443_SCREEN_WIDTH ||
         s40_result[FW_DISPLAY_HEIGHT_WORD] != RM443_SCREEN_HEIGHT ||
-        s40_result[FW_TIMER_MESSAGE_LAST_WORD] != RM443_TIMER_MESSAGE_LAST ||
         s40_result[FW_CANVAS_LAYOUT_WORD] != FW_CANVAS_CURRENT)
         return 0;
-    static const fw_rom_fingerprint entries[] = {
-#define RM443_SIGNATURE(name, address, hash) {address, hash},
-            RM443_VIDEO_ROM_ENTRIES(RM443_SIGNATURE)
-#undef RM443_SIGNATURE
-    };
-    for (unsigned i = 0; i < sizeof(entries) / sizeof(*entries); ++i) {
-        if (!fw_rom_matches(&entries[i])) {
-            support_reason = "ROM fingerprint mismatch";
+    support_reason = "incomplete RGB565 bindings";
+    for (unsigned i = FW_VIDEO_FIRST + 1; i < FW_VIDEO_LIMIT; ++i)
+        if (!s40_result[FW_API_DESCRIPTOR + i])
             return 0;
-        }
-    }
     support_reason = "none";
     return 1;
 }
@@ -76,7 +64,7 @@ int s40_rm443_video_services_pending(void) {
      * task explicitly; this adapter is not an arbitrary native-task renderer.
      */
     if (s40_result[FW_RESULT_TASK_ID_WORD] != RM443_JAVA_TASK ||
-        *RM443_JAVA_TASK_SLOT != RM443_ROM_java_task_descriptor)
+        *RM443_JAVA_TASK_SLOT != RM443_BINDING(JAVA_TASK_DESCRIPTOR))
         return -1;
     const volatile rm443_cm_task* task = RM443_PTR(rm443_cm_task, *RM443_JAVA_TASK_SLOT);
     if (task->queue != RM443_JAVA_QUEUE)
@@ -207,7 +195,7 @@ static int settle_format(void) {
     return 0;
 }
 
-/* Mirror F0253928 bus activation; matching cleanup is F025385C. */
+/* Mirror the resolved stock submit/complete bus ownership sequence. */
 static void bus_enable(void) {
     irq_lock();
     *RM443_LCD_CONTROL &= ~RM443_BUS_IDLE;
@@ -252,7 +240,7 @@ static void set_colmod(unsigned format) {
 static int platform_ok(void) {
     if (!s40_rm443_video_supported())
         return 0;
-    /* Function entry bytes are already covered by the full ROM registry.
+    /* Code and partial layouts were validated by the shared resolver.
      * Live checks below guard operating mode, the panel identity and power.
      * The three zero guards are verified preconditions; their wider semantics
      * are deliberately not exposed as device controls. */
@@ -262,7 +250,7 @@ static int platform_ok(void) {
            RM443_LCD->powered != 0 && RM443_LCD->mode_guard == 0;
 }
 
-/* Invoked by F0254170 after stock DMA/clock/pin cleanup and driver gate release. */
+/* Invoked by stock set_completion after DMA/clock/pin cleanup and gate release. */
 static void completed(int ignored) {
     (void)ignored;
     completion_ms = milliseconds();
@@ -416,17 +404,17 @@ static int submit(const void* source, s40_rm443_video_callback callback, uint32_
     application_callback = callback;
     completion_ms = 0;
     last_result = RM443_VIDEO_OK;
-    ++RM443_LCD_PENDING->pending_updates; /* exact32-bit increment in F0254246 */
+    ++RM443_LCD_PENDING->pending_updates; /* matches the stock wrapper's 32-bit counter */
     rm443_lcd_set_completion(0, completed);
     rm443_lcd_window(0, RM443_SCREEN_HEIGHT - 1, 0, RM443_SCREEN_WIDTH - 1);
     rm443_lcd_arm(RM443_FRAME_WORDS, 0, NULL);
     RM443_LCD->completion =
-            (RM443_ROM_lcd_public_complete | 1u); /* ordinary public update completion wrapper */
+            RM443_BINDING(LCD_PUBLIC_COMPLETE); /* ordinary public update completion wrapper */
     irq_lock();
     pending = 1;
     BARRIER();
     unsigned channel = rm443_dma_start(source, RM443_DMA_REQUEST, RM443_FRAME_WORDS,
-                                       (void*)(uintptr_t)(RM443_ROM_lcd_dma_complete | 1u));
+                                       (void*)(uintptr_t)RM443_BINDING(LCD_DMA_COMPLETE));
     RM443_LCD->dma_channel = (uint8_t)channel;
     if (channel >= RM443_DMA_CHANNEL_COUNT) {
         /* No DMA owns source. Stock abort resets the armed LCD transaction.

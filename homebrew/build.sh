@@ -40,6 +40,7 @@ test -n "$ARTIFACT" && test "${#APP_SOURCES[@]}" -gt 0
 python3 "$WORKSPACE_DIR/tools/clean_build_outputs.py" java "$PROJECT_DIR" "$BUILD_DIR" "build/$EXAMPLE" "$EXAMPLE_DIR"
 mkdir -p "$BUILD_DIR/obj" "$BUILD_DIR/classes" "$BUILD_DIR/preverified" "$DIST_DIR"
 python3 "$PROJECT_DIR/tools/gen_imports.py" "$BUILD_DIR"
+s40_generate_signatures "$BUILD_DIR/signatures"
 FLAGS=(-target arm-none-eabi -march=armv5te -marm -mfloat-abi=soft -O2
     -fPIC -fvisibility=hidden -ffreestanding -fno-builtin -fno-stack-protector
     -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-strict-aliasing
@@ -82,7 +83,7 @@ printf 'Building shared bootstrap and Java launcher...\n'
 "$LD" --image-base=0 -Ttext=0 -e stage_start -o "$BUILD_DIR/stage.elf" "$BUILD_DIR/stage.o"
 "$LLVM/llvm-objcopy" -O binary "$BUILD_DIR/stage.elf" "$BUILD_DIR/stage.bin"
 "$LLVM/llvm-objdump" -d "$BUILD_DIR/loader.elf" > "$BUILD_DIR/loader.disasm.txt"
-"$JAVA8_HOME/bin/java" -cp "$LEGACY_JAVAC" j2me.thirdparty.legacyjavac.Main -source 1.3 -target 1.1 -g:none -bootclasspath "$SDK_CLASSES" -d "$BUILD_DIR/classes" "${S40_JAVA_SOURCES[@]}" "$EXAMPLE_DIR"/src/*.java "$BUILD_DIR/FirmwareApi.java" "$BUILD_DIR/NativeBuildConfig.java"
+"$JAVA8_HOME/bin/java" -cp "$LEGACY_JAVAC" j2me.thirdparty.legacyjavac.Main -source 1.3 -target 1.1 -g:none -bootclasspath "$SDK_CLASSES" -d "$BUILD_DIR/classes" "${S40_JAVA_SOURCES[@]}" "${S40_SIGNATURE_JAVA_SOURCES[@]}" "$EXAMPLE_DIR"/src/*.java "$BUILD_DIR/FirmwareApi.java" "$BUILD_DIR/NativeBuildConfig.java"
 python3 "$PROJECT_DIR/tools/preverify.py" "$JAVA8_HOME/bin/java" "$PROGUARD_JAR" "$SDK_CLASSES" "$BUILD_DIR/classes" "$BUILD_DIR/preverified"
 "$JAVA8_HOME/bin/javap" -classpath "$BUILD_DIR/preverified" -c -p -v NativeSession > "$BUILD_DIR/NativeSession.javap.txt"
 "$JAVA8_HOME/bin/javap" -classpath "$BUILD_DIR/preverified" -c -p -v FirmwareResolver > "$BUILD_DIR/FirmwareResolver.javap.txt"

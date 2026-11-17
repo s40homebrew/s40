@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Exercise maintained PCM ownership, pacing and profile gates without firmware."""
+"""Exercise maintained PCM ownership, pacing and capability decoding without firmware."""
 
 import os
 import subprocess
@@ -35,16 +35,8 @@ with tempfile.TemporaryDirectory(prefix="s40-audio-") as temporary:
                 str(Path(__file__).with_name(source)),
                 *(
                     [
-                        str(path)
-                        for path in (sdk / "src/native/audio/devices").glob("rm[0-9][0-9][0-9].c")
-                    ]
-                    if source != "test_clock.c"
-                    else []
-                ),
-                *(
-                    [
                         str(sdk / "src/native/audio" / path)
-                        for path in ("core.c", "device.c", "commgr/driver.c", "devices/registry.c")
+                        for path in ("core.c", "device.c", "services.c", "commgr/driver.c")
                     ]
                     if source == "test_device.c"
                     else []

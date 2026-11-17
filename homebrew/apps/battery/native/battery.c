@@ -1,21 +1,12 @@
 /* SPDX-License-Identifier: MIT */
-/* RM-443 10.12 adapter. Only short, read-only energy getters are called.
- * The shared resolver/bootstrap remain unchanged. This app deliberately uses
- * exact-build entry points, guarded by their code and RAM-pointer literals.
- */
+/* Battery bindings come from the shared, bounded firmware resolver. */
 #include <stdint.h>
 
+#include "firmware/bindings.h"
 #include "s40/runtime.h"
 
-static int matches(uintptr_t address, const unsigned char* bytes, unsigned size) {
-    const volatile unsigned char* rom = (const volatile unsigned char*)address;
-    for (unsigned i = 0; i < size; ++i)
-        if (rom[i] != bytes[i])
-            return 0;
-    return 1;
-}
-
-static unsigned getter(uintptr_t address) { return ((unsigned (*)(void))(address | 1u))(); }
+static uintptr_t binding(unsigned id) { return s40_result[FW_API_DESCRIPTOR + id]; }
+static unsigned getter(unsigned id) { return ((unsigned (*)(void))binding(id))(); }
 
 /* Read the soft-float double without assuming an atomic 64-bit RAM load. */
 static double energy(uintptr_t address) {
@@ -34,54 +25,38 @@ static double energy(uintptr_t address) {
 }
 
 int s40_app_main(void) {
-    static const unsigned char capacity[] = {
-            0x7d, 0x48, 0x10, 0xb5, 0x00, 0x68, 0x3c, 0x21, 0x40, 0x1e, 0x40, 0x00, 0xa0, 0xf3,
-            0xcc, 0xed, 0x40, 0x1d, 0x04, 0x04, 0x24, 0x0c, 0x02, 0xf0, 0x96, 0xff, 0xa0, 0x42,
-            0x02, 0xd8, 0x02, 0xf0, 0x92, 0xff, 0x04, 0x00, 0x20, 0x00, 0x10, 0xbd};
-    static const unsigned char nominal[] = {0x15, 0x48, 0x80, 0x88, 0x70, 0x47};
-    static const unsigned char bars[] = {0x84, 0x48, 0x1c, 0x38, 0x00, 0x79, 0x70, 0x47};
-    static const unsigned char voltage[] = {0x77, 0x48, 0x40, 0x89, 0x70, 0x47};
-    static const unsigned char charger[] = {0x02, 0x48, 0x00, 0x78, 0x70, 0x47};
-    if (!matches(0xF0166C40, capacity, sizeof(capacity)) ||
-        !matches(0xF0169B86, nominal, sizeof(nominal)) ||
-        !matches(0xF0166C38, bars, sizeof(bars)) ||
-        !matches(0xF0166C6E, voltage, sizeof(voltage)) ||
-        !matches(0xF016C37E, charger, sizeof(charger)) ||
-        *(const volatile uint32_t*)0xF0166E38 != 0xD9A2A000 ||
-        *(const volatile uint32_t*)0xF0166E4C != 0xD803FCC4 ||
-        *(const volatile uint32_t*)0xF0169BDC != 0xD8040270 ||
-        *(const volatile uint32_t*)0xF016C388 != 0xD80031C8)
+    if (binding(API_BATTERY_ABI) != FW_BATTERY_ABI_RM443)
         return 41;
 
-    /* D9A2A000 holds the firmware's remaining-time estimate plus one.
+    /* The model holds the firmware's remaining-time estimate plus one.
      * Zero is uninitialised; the capacity getter would underflow on zero.
      * The native capacity getter converts this to mAh and caps at nominal.
      */
-    unsigned full = getter(0xF0169B86);
+    unsigned full = getter(API_BATTERY_NOMINAL);
     if (!full || full == 65535 || full > 20000)
         return 42;
-    unsigned charger_state = getter(0xF016C37E);
+    unsigned charger_state = getter(API_BATTERY_CHARGER);
     unsigned remaining = UINT32_MAX;
-    int32_t charge = *(const volatile int32_t*)0xD9A2A030;
-    int32_t accounted = *(const volatile int32_t*)0xD9A2A038;
-    unsigned paused = *(const volatile uint8_t*)0xD803FCB7;
+    int32_t charge = *(const volatile int32_t*)binding(API_BATTERY_CHARGE);
+    int32_t accounted = *(const volatile int32_t*)binding(API_BATTERY_ACCOUNTED);
+    unsigned paused = *(const volatile uint8_t*)binding(API_BATTERY_PAUSED);
     unsigned source = 0;
-    if (charger_state == 4 && *(const volatile uint8_t*)0xD9A2A040 == 1) {
+    if (charger_state == 4 && *(const volatile uint8_t*)binding(API_BATTERY_COMPLETE) == 1) {
         remaining = full;
         source = 3;
     } else if (paused || charger_state == 2 || charger_state == 6) {
         /* The discharge getter can return its +5 mAh floor while charging.
          * Mirror the arithmetic used when the firmware resumes its battery
-         * monitor (F0166AF6 -> F016C9A6 -> F0169854), without calling those
-         * mutating functions. Energy is in microamp-seconds; the charging
-         * counter is in milliamp-seconds. The accounted counter is subtracted
-         * so charge already applied to the model is never added twice.
+         * monitor, without calling its mutating functions. Energy is in microamp-seconds; the
+         * charging counter is in milliamp-seconds. The accounted counter is subtracted so charge
+         * already applied to the model is never added twice.
          */
-        double used = energy(0xD8040208);
-        double empty = energy(0xD8040220);
+        double used = energy(binding(API_BATTERY_USED_ENERGY));
+        double empty = energy(binding(API_BATTERY_EMPTY_ENERGY));
         double added = paused ? ((double)charge - accounted) / 3600.0 : 0.0;
-        if (!*(const volatile uint16_t*)0xD8040264 && used >= 0.0 && used <= 1.0e13 &&
-            empty > 0.0 && empty <= 1.0e13 && added >= -(double)full && added <= 2.0 * full) {
+        if (!*(const volatile uint16_t*)binding(API_BATTERY_MODEL_INVALID) && used >= 0.0 &&
+            used <= 1.0e13 && empty > 0.0 && empty <= 1.0e13 && added >= -(double)full &&
+            added <= 2.0 * full) {
             double base = (empty - used) / 3600000.0;
             /* An empty/sentinel model with no accumulated charge supplies no
              * useful charging estimate. Do not present the +5 floor as 1%.
@@ -96,8 +71,8 @@ int s40_app_main(void) {
                 source = 2;
             }
         }
-    } else if (*(const volatile uint32_t*)0xD9A2A000) {
-        remaining = getter(0xF0166C40);
+    } else if (*(const volatile uint32_t*)binding(API_BATTERY_ESTIMATE)) {
+        remaining = getter(API_BATTERY_CAPACITY);
         source = 1;
     }
     if (remaining != UINT32_MAX && remaining > full) {
@@ -110,8 +85,8 @@ int s40_app_main(void) {
      */
     s40_result[17] = remaining;
     s40_result[18] = full;
-    s40_result[19] = getter(0xF0166C38);
-    s40_result[20] = getter(0xF0166C6E);
+    s40_result[19] = getter(API_BATTERY_BARS);
+    s40_result[20] = getter(API_BATTERY_VOLTAGE);
     s40_result[21] = charger_state;
     s40_result[22] = source;
     s40_result[23] = (uint32_t)charge;

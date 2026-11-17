@@ -27,17 +27,12 @@ public final class PcBridgeInstaller extends MIDlet implements Runnable, Command
             platform = null;
         }
         FirmwareProfile profile = FirmwareProfiles.select(platform);
-        int slash = platform == null ? -1 : platform.indexOf('/');
-        String version = slash < 0 ? "" : platform.substring(slash + 1).trim();
-        // The shared bootstrap supports other RM-443 releases; this fixed
-        // protocol adapter requires 10.12, with ROM checks repeated natively.
-        if (profile == null || !"RM-443".equals(profile.id)
-                || !(version.equals("10.12") || version.startsWith("10.12 "))) {
-            fail("Requires Nokia 6303 classic (RM-443), firmware 10.12.\nDetected: "
+        if (profile == null || !"RM-443".equals(profile.id)) {
+            fail("Requires Nokia 6303 classic (RM-443).\nDetected: "
                     + (platform == null ? "unavailable" : platform));
             return;
         }
-        session = new NativeSession(profile, "/application.bin");
+        session = new NativeSession(profile, "/application.bin", FirmwareResolver.CAP_BRIDGE);
         new Thread(this).start();
     }
 
