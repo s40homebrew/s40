@@ -15,6 +15,7 @@ Use [build setup](../../docs/building.md) for the compiler dependencies. Source
 | Chunked resource loading | `python3 homebrew/tests/bootstrap/test_chunked_resource.py` |
 | Native allocation limits | `python3 homebrew/tests/bootstrap/test_native_limits.py` |
 | Build-directory cleanup | `python3 -m pytest tests/test_clean_build_outputs.py` |
+| Assembly signatures, C output and Java matching | `python3 homebrew/tests/resolver/test_signatures.py` |
 | Input, timing, paths, files and launcher helpers | `python3 homebrew/tests/services/check.py` |
 | PCM lifecycle, device selection and mixer clock | `python3 homebrew/tests/audio/check.py` |
 | Display, scaling, message handling and keep-awake | `bash homebrew/tests/video/check.sh` |
