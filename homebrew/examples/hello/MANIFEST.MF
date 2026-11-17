@@ -1,6 +1,6 @@
 Manifest-Version: 1.0
 MIDlet-Name: S40 Hello
-MIDlet-Version: 0.1.0
+MIDlet-Version: 0.1.1
 MIDlet-Vendor: Homebrew
 MIDlet-1: S40 Hello,,HelloLauncher
 MicroEdition-Configuration: CLDC-1.1

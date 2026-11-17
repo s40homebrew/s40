@@ -15,7 +15,7 @@ public final class S40RamBooster extends MIDlet
     private String detailsText;
     private List menu;
     private HeapBoosterSession session;
-    private String platform;
+    private String platform, buildVersion;
     private volatile boolean busy;
     private int operation, mib;
     private long operationMillis;
@@ -27,6 +27,9 @@ public final class S40RamBooster extends MIDlet
     protected void startApp() {
         if (menu == null) {
             platform = System.getProperty("microedition.platform");
+            buildVersion = getAppProperty("MIDlet-Version");
+            if (buildVersion == null)
+                buildVersion = "unknown";
             HeapBoosterProfile p = HeapBoosterProfiles.select(platform);
             if (p != null)
                 session = new HeapBoosterSession(p);
@@ -52,7 +55,7 @@ public final class S40RamBooster extends MIDlet
                                                                          : 3;
     }
     private void rebuildMenu() {
-        menu = new List("S40 RAM Booster 0.10.0", List.IMPLICIT);
+        menu = new List("S40 RAM Booster " + buildVersion, List.IMPLICIT);
         menu.append("Check phone", null);
         sizeCount = 0;
         if (session != null) {
@@ -202,7 +205,7 @@ public final class S40RamBooster extends MIDlet
         }
         String summary = resultSummary(requested);
         String text;
-        text = platform + "\n" + session.profile.id + "\nVersion: 0.10.0"
+        text = platform + "\n" + session.profile.id + "\nVersion: " + buildVersion
                 + "\nStatus: " + session.error;
         if (session.error != 0)
             text += "\n" + HeapBoosterDiagnostics.reason(session.error);

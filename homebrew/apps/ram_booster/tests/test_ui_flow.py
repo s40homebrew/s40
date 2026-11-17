@@ -18,6 +18,9 @@ SOURCES = {
 package javax.microedition.midlet;
 public class MIDlet {
     public boolean destroyed;
+    public String getAppProperty(String key) {
+        return "MIDlet-Version".equals(key) ? "9.8.7" : null;
+    }
     public void notifyDestroyed() { destroyed = true; }
 }
 """,
@@ -157,10 +160,12 @@ public class CheckBoosterUI {
     public static void main(String[] args) throws Exception {
         System.setProperty("microedition.platform","Nokia3060/03.63");
         S40RamBooster a=launch(); check(((List)Display.current).size==3);
+        check(Display.current.title.equals("S40 RAM Booster 9.8.7"));
         HeapBoosterSession.failCount=1;
         chooseCheck(a); check(HeapBoosterSession.calls==2);
         check(form().button != null);
         String detail=new String(RecordStore.records.get("RamBoosterResult"),"UTF-8");
+        check(detail.contains("Version: 9.8.7"));
         check(detail.contains("Automatic retries: 1") && detail.contains("00000064 / 000000C8"));
         form().button.tap(); idle(a);
         check(HeapBoosterSession.applies==1 && form().text.contains("not active yet"));

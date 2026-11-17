@@ -1,6 +1,6 @@
 Manifest-Version: 1.0
 MIDlet-Name: Battery Info
-MIDlet-Version: 0.2.1
+MIDlet-Version: 0.2.2
 MIDlet-Vendor: Homebrew
 MIDlet-1: Battery Info,,BatteryInfo
 Nokia-MIDlet-Category: Application
